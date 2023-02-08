@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Walker
+    given-names: Reuben S.
+title: "Vibrato Frequency and Extent Calculation"
+version: 1.0
+doi: 
+date-released: 2023-02-08
