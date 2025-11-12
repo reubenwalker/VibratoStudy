@@ -1409,26 +1409,50 @@ def apply_vibTremorDecision_rolling(wavFile, samplerate, model, refRMS, window_d
         # vibPercent
     # )
 
-def apply_vibTremorDecision_rolling_harmonics(wavFile, samplerate, model, refRMS, meanFreq,
-                                              window_duration=1.0, step_duration=0.01,
-                                              max_freq=8000):
+import numpy as np
+import pandas as pd
+
+def apply_vibTremorDecision_rolling_harmonics(
+    wavFile, samplerate, model, refRMS, meanFreq,
+    window_duration=1.0, step_duration=0.01, max_freq=8000, calibrated=False,
+):
     """
     Apply vibTremorDecision and harmonic vibrato analysis over rolling windows.
     Returns median values for each measure across the windows.
     
-    Parameters:
-        wavFile: np.ndarray - 1D audio samples
-        samplerate: int
-        model: sklearn-like classifier with .predict()
-        refRMS: reference RMS for normalization
-        window_duration: float - window size in seconds
-        step_duration: float - step size in seconds
-        max_freq: float - maximum frequency to analyze (Hz)
-    
-    Returns:
-        median_vibRate, median_vibExtent, median_vibAmpRate, median_vibAmpExtent,
-        median_vibAmpExtent_SPL, median_vibAmpExtent_dB, median_vibPerc,
-        median_harmonic_extent_pa, median_harmonic_extent_spl, median_harmonic_mean_spl
+    Parameters
+    ----------
+    wavFile : np.ndarray
+        1D array of audio samples.
+    samplerate : int
+        Sampling rate of audio.
+    model : sklearn-like classifier with .predict()
+    refRMS : float
+        Reference RMS for normalization.
+    meanFreq : float
+        Fundamental frequency (Hz).
+    window_duration : float, optional
+        Window size in seconds (default = 1.0).
+    step_duration : float, optional
+        Step size in seconds (default = 0.01).
+    max_freq : float, optional
+        Maximum frequency to analyze (Hz).
+
+    Returns
+    -------
+    tuple :
+        (
+            median_vibRate,
+            median_vibExtent,
+            median_vibAmpRate,
+            median_vibAmpExtent,
+            median_vibAmpExtent_SPL,
+            median_vibAmpExtent_dB,
+            vibPerc,
+            median_harmonic_extent_pa_array,
+            median_harmonic_extent_spl_array,
+            median_harmonic_mean_spl_array
+        )
     """
     window_size = int(window_duration * samplerate)
     step_size = int(step_duration * samplerate)
@@ -1441,11 +1465,21 @@ def apply_vibTremorDecision_rolling_harmonics(wavFile, samplerate, model, refRMS
     harmonic_extents_pa = []
     harmonic_extents_spl = []
     harmonic_mean_spl = []
+    
+    TARGET_LUFS = -23.0
+    meter = pyln.Meter(samplerate)
+    # print(wavFile)
+    if calibrated:
+        wavFile_norm = wavFile
+    else:
+        wavFile = wavFile.astype(float)
+        loudness = meter.integrated_loudness(wavFile)
+        wavFile_norm = pyln.normalize.loudness(wavFile, loudness, TARGET_LUFS)
 
     for start in range(0, len(wavFile) - window_size + 1, step_size):
         segment = wavFile[start:start + window_size]
 
-        # --- Original vibTremorDecision
+        # --- vibTremorDecision
         result = vibTremorDecision3(segment, samplerate, model, refRMS)
         if pd.notna(result[0]):
             vibRate, vibExtent, vibAmpRate, vibAmpExtent, vibAmpExtent_SPL_val, vibAmpExtent_dB_val = result
@@ -1465,18 +1499,41 @@ def apply_vibTremorDecision_rolling_harmonics(wavFile, samplerate, model, refRMS
             vibAmpExtents_dB.append(np.nan)
             vibPercent.append(np.nan)
 
-        # --- Harmonic-level analysis
-        df_harmonics = analyze_vibrato(segment, samplerate, f0=meanFreq, max_freq=max_freq)
-        if not df_harmonics.empty:
-            harmonic_extents_pa.append(df_harmonics['extent_pa'].median())
-            harmonic_extents_spl.append(df_harmonics['extent_spl'].median())
-            harmonic_mean_spl.append(df_harmonics['mean_spl'].median())
-        else:
-            harmonic_extents_pa.append(np.nan)
-            harmonic_extents_spl.append(np.nan)
-            harmonic_mean_spl.append(np.nan)
+        # --- Harmonic vibrato analysis
+        segment_norm = wavFile_norm[start:start + window_size]
+        df_harmonics = analyze_vibrato(segment_norm, samplerate, f0=meanFreq, max_freq=max_freq)
 
-    # --- Compute medians across windows
+        if not df_harmonics.empty:
+            # Each df has one value per harmonic
+            harmonic_extents_pa.append(df_harmonics["extent_pa"].values)
+            harmonic_extents_spl.append(df_harmonics["extent_spl"].values)
+            harmonic_mean_spl.append(df_harmonics["mean_spl"].values)
+        else:
+            harmonic_extents_pa.append([])
+            harmonic_extents_spl.append([])
+            harmonic_mean_spl.append([])
+
+    # --- Handle variable-length harmonic arrays
+    def pad_array_list(array_list):
+        if not array_list:
+            return np.empty((0, 0))
+        max_len = max(len(a) for a in array_list)
+        padded = np.full((len(array_list), max_len), np.nan)
+        for i, arr in enumerate(array_list):
+            arr = np.atleast_1d(arr)
+            padded[i, :len(arr)] = arr
+        return padded
+
+    harmonic_extents_pa_padded = pad_array_list(harmonic_extents_pa)
+    harmonic_extents_spl_padded = pad_array_list(harmonic_extents_spl)
+    harmonic_mean_spl_padded = pad_array_list(harmonic_mean_spl)
+
+    # --- Median per harmonic (axis=0 = across windows)
+    median_harmonic_extent_pa = np.nanmedian(harmonic_extents_pa_padded, axis=0)
+    median_harmonic_extent_spl = np.nanmedian(harmonic_extents_spl_padded, axis=0)
+    median_harmonic_mean_spl = np.nanmedian(harmonic_mean_spl_padded, axis=0)
+
+    # --- Compute scalar medians for vib/tremor metrics
     vibPerc = np.nansum(vibPercent) / len(vibPercent) if vibPercent else np.nan
 
     return (
@@ -1487,9 +1544,9 @@ def apply_vibTremorDecision_rolling_harmonics(wavFile, samplerate, model, refRMS
         np.nanmedian(vibAmpExtents_SPL),
         np.nanmedian(vibAmpExtents_dB),
         vibPerc,
-        np.nanmedian(harmonic_extents_pa),
-        np.nanmedian(harmonic_extents_spl),
-        np.nanmedian(harmonic_mean_spl)
+        median_harmonic_extent_pa,
+        median_harmonic_extent_spl,
+        median_harmonic_mean_spl
     )
 
 
@@ -2303,14 +2360,14 @@ def analyze_vibrato(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="
     for h in harmonics:
         f_h = h * f0
         vib_cents = vibExtent_f0  # expected vibrato extent
-        bandwidth_h = 2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
+        bandwidth_h = f0#2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
         filtered = bandpass_filter(signal_pa, fs, f_h, bandwidth_h)
 
         env_pa = np.abs(hilbert(filtered))
         env_spl = 20 * np.log10(env_pa / P_REF + 1e-12)
         extent_pa = compute_vibrato_extent(env_pa, fs, vibRate_f0)
         extent_spl = compute_vibrato_extent(env_spl, fs, vibRate_f0)
-        mean_spl = np.mean(env_spl)  # mean SPL of this harmonic
+        mean_spl = np.median(env_spl)  # mean SPL of this harmonic
 
         results.append({
             "file_id": file_id,
@@ -2473,7 +2530,175 @@ def instant_spl_from_pa(p):
     spl = 20.0 * np.log10(np.abs(p) + eps) - 20.0 * np.log10(P_REF)
     return spl
 
-# 1) Compute calibration factor from your calibration file:
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, hilbert
+import pyloudnorm as pyln
+from scipy.signal import butter, sosfiltfilt
+
+
+def visualize_signal_and_harmonics(
+    signal_pa, fs, f0,
+    vibExtent_f0,
+    harmonics=np.arange(1, 5),
+    bandwidth=40,
+    target_loudness=-23.0,
+    p_ref=20e-6,
+    time_window=None
+):
+    """
+    Figure 1:
+      [0,0] Original signal in Pa (with mean RMS SPL line)
+      [0,1] Loudness-normalized signal in Pa (with mean RMS SPL line)
+      [1:,0] Filtered harmonic signals in Pa (original)
+      [1:,1] Filtered harmonic signals in Pa (normalized)
+
+    Figure 2:
+      [1:,0] Harmonic envelopes in SPL [dB]
+      [1:,1] Loudness-normalized harmonic envelopes in SPL [dB]
+    """
+
+    # --- Helper: bandpass filter ---
+
+    def bandpass_filter(x, fs, f0, bandwidth):
+        nyq = fs / 2.0
+        low = max(1.0, f0 - bandwidth / 2) / nyq
+        high = min(nyq - 1, f0 + bandwidth / 2) / nyq
+
+        if low >= high:
+            return np.zeros_like(x)
+
+        # 4th-order Butterworth in SOS form (numerically stable)
+        sos = butter(4, [low, high], btype='band', output='sos')
+        y = sosfiltfilt(sos, x)
+        return y
+
+
+    # --- Time vector ---
+    T = len(signal_pa) / fs
+    t = np.linspace(0, T, len(signal_pa))
+
+    # --- Loudness normalization ---
+    meter = pyln.Meter(fs)
+    loudness = meter.integrated_loudness(signal_pa)
+    signal_norm = pyln.normalize.loudness(signal_pa, loudness, target_loudness)
+    # signal_pa = signal_pa - np.mean(signal_pa)
+    # signal_norm = signal_norm - np.mean(signal_norm)
+
+    # --- Compute RMS SPL values ---
+    rms_orig = np.sqrt(np.mean(signal_pa**2))
+    rms_norm = np.sqrt(np.mean(signal_norm**2))
+    mean_rms_spl_orig = 20 * np.log10(rms_orig / p_ref)
+    mean_rms_spl_norm = 20 * np.log10(rms_norm / p_ref)
+
+    # --- Optional zoom window ---
+    if time_window is not None:
+        mask = (t >= time_window[0]) & (t <= time_window[1])
+    else:
+        mask = slice(None)
+
+    # ----------------------------------------------------------
+    #  FIGURE 1 — Filtered signals in Pa
+    # ----------------------------------------------------------
+    n_rows = len(harmonics) + 1
+    fig1, axes1 = plt.subplots(n_rows, 2, figsize=(12, 2.6 * n_rows))
+    plt.subplots_adjust(hspace=0.6)
+    axes1 = np.atleast_2d(axes1)
+
+    # === [0,0] Original signal (Pa) ===
+    axes1[0, 0].plot(t[mask], signal_pa[mask], color='tab:blue', lw=0.8)
+    axes1[0, 0].axhline(
+        y=rms_orig, color='tab:red', ls='--', lw=0.8,
+        alpha=0.6, label=f"Mean RMS SPL: {mean_rms_spl_orig:.1f} dB"
+    )
+    axes1[0, 0].set_ylabel("Amplitude [Pa]")
+    axes1[0, 0].set_title("Original Signal (Pa)")
+    axes1[0, 0].legend()
+
+    # === [0,1] Normalized signal (Pa) ===
+    axes1[0, 1].plot(t[mask], signal_norm[mask], color='tab:red', lw=0.8)
+    axes1[0, 1].axhline(
+        y=rms_norm, color='tab:blue', ls='--', lw=0.8,
+        alpha=0.6, label=f"Mean RMS SPL: {mean_rms_spl_norm:.1f} dB"
+    )
+    axes1[0, 1].set_ylabel("Amplitude [Pa]")
+    axes1[0, 1].set_title(f"Normalized Signal (Target {target_loudness:.1f} LUFS)")
+    axes1[0, 1].legend()
+
+    filtered_orig_list = []
+    filtered_norm_list = []
+    env_orig_spl_list = []
+    env_norm_spl_list = []
+
+    # === HARMONICS ===
+    for i, h in enumerate(harmonics):
+        f_h = h * f0
+        vib_cents = vibExtent_f0
+        bandwidth_h = f0 / 2.0#np.max([40,2 * f_h * (2**(vib_cents/1200) - 1) * 1.5])
+        filtered_orig = bandpass_filter(signal_pa, fs, f_h, bandwidth_h)
+        filtered_norm = bandpass_filter(signal_norm, fs, f_h, bandwidth_h)
+
+        filtered_orig_list.append(filtered_orig)
+        filtered_norm_list.append(filtered_norm)
+
+        # plot in Pa
+        axes1[i + 1, 0].plot(t[mask], filtered_orig[mask], color='tab:blue', lw=0.8)
+        axes1[i + 1, 0].set_ylabel("Pa")
+        axes1[i + 1, 0].set_title(f"Harmonic {h}: {f_h:.1f} Hz (Original)")
+
+        axes1[i + 1, 1].plot(t[mask], filtered_norm[mask], color='tab:red', lw=0.8)
+        axes1[i + 1, 1].set_ylabel("Pa")
+        axes1[i + 1, 1].set_title(f"Harmonic {h}: {f_h:.1f} Hz (Normalized)")
+
+        # compute envelopes for later
+        env_orig = np.abs(hilbert(filtered_orig))
+        env_norm = np.abs(hilbert(filtered_norm))
+        env_orig_spl = 20 * np.log10(env_orig / p_ref + 1e-12)
+        env_norm_spl = 20 * np.log10(env_norm / p_ref + 1e-12)
+        env_orig_spl_list.append(env_orig_spl)
+        env_norm_spl_list.append(env_norm_spl)
+
+    for ax in axes1[-1, :]:
+        ax.set_xlabel("Time [s]")
+    plt.tight_layout()
+    plt.show()
+
+    # ----------------------------------------------------------
+    #  FIGURE 2 — Envelopes in SPL
+    # ----------------------------------------------------------
+    fig2, axes2 = plt.subplots(len(harmonics), 2, figsize=(12, 2.6 * len(harmonics)))
+    plt.subplots_adjust(hspace=0.6)
+    axes2 = np.atleast_2d(axes2)
+
+    for i, h in enumerate(harmonics):
+        axL = axes2[i, 0]
+        axR = axes2[i, 1]
+        f_h = h * f0
+        axL.plot(t[mask], env_orig_spl_list[i][mask], color='tab:blue', lw=1)
+        axL.set_ylabel("SPL [dB]")
+        axL.set_title(f"Harmonic {h}: {f_h:.1f} Hz (Original)")
+
+        axR.plot(t[mask], env_norm_spl_list[i][mask], color='tab:red', lw=1)
+        axR.set_ylabel("SPL [dB]")
+        axR.set_title(f"Harmonic {h}: {f_h:.1f} Hz (Normalized)")
+
+    for ax in axes2[-1, :]:
+        ax.set_xlabel("Time [s]")
+    plt.tight_layout()
+    plt.show()
+
+    # --- Console summary ---
+    print(f"Original loudness: {loudness:.2f} LUFS → Normalized to {target_loudness:.2f} LUFS")
+    print(f"Mean RMS SPL (orig): {mean_rms_spl_orig:.2f} dB | (normalized): {mean_rms_spl_norm:.2f} dB")
+
+    return {
+        "orig_LUFS": loudness,
+        "norm_LUFS": target_loudness,
+        "mean_rms_spl_orig": mean_rms_spl_orig,
+        "mean_rms_spl_norm": mean_rms_spl_norm,
+    }
+
+
 
 
 
@@ -2622,10 +2847,10 @@ for i in wav_files:
         
 singingSamples =  dreiklangFiles #dBFiles +   + #vokalFiles #+  + comeFiles vokalFiles +  avezzoFiles + 
 
-
+prompt = "go"
 # indexArray = df.sort_values('Vibrato-Umfang (F_0)',ascending=False)[['Vibrato-Umfang (F_0)','id','date']].index
 for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
-    wavFilename = i#"0081&2017_11_08&test2.wav"#"0006&2014_07_10&Test 2.wav"#"0081&2017_11_08&test2.wav"#i#df.loc[i].loc['newFilename']#df.sample()['newFilename'].iloc[0]# candFiles[i]
+    wavFilename = i#random.choice(singingSamples)#"0081&2017_11_08&test2.wav"#"0006&2014_07_10&Test 2.wav"#"0081&2017_11_08&test2.wav"#i#df.loc[i].loc['newFilename']#df.sample()['newFilename'].iloc[0]# candFiles[i]
     #Corrupted Files
     if wavFilename in ['C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0011&2004_03_09&TEST2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0038&2004_03_16&TEST2.wav',
@@ -2639,6 +2864,8 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     geschlecht = np.nan#df.loc[i].loc['geschlecht']
     samplerate, data = read(wavFilename)
     duration = len(data)/samplerate #seconds
+    # if duration < 0.2:
+        # continue
     trialNum = wavFilename.split('\\')[-1][-5]
     idNum = int(wavFilename.split('\\')[-1].split('&')[0])
     date = wavFilename.split('\\')[-1].split('&')[1]
@@ -2685,11 +2912,6 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     #tremorRate = tremorRateCalc(highestPitch, samplerate)
     # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp = vibTremorDecision(highestPitch, samplerate, model)
     # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent = apply_vibTremorDecision_rolling(highestPitch, samplerate, model, refRMS, window_duration=1)
-    
-    result = apply_vibTremorDecision_rolling_harmonics(highestPitch, samplerate, model, refRMS, meanFreq,
-                                              window_duration=1.0, step_duration=0.01,
-                                              max_freq=8000)
-    vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent, vibExtentPa_roll, vibExtentSPL_roll, harmonicSPL_mean  = result
     dummyFilename = r"C:\Users\Reuben\Documents\Code\Promotionsvorhaben\Sandbox\00575&2024_05_17&94dB.wav"
     dBfilename = wavFilename[:-9] + "94dB.wav"
     try:
@@ -2698,9 +2920,30 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     except:
         cal = compute_calibration_factor(dummyFilename, fs_expected=48000, tone_freq=1000.0)
         calibration = False
-        
+    # cal = compute_calibration_factor(dummyFilename, fs_expected=48000, tone_freq=1000.0)
+    # calibration = False
     refRMS = cal['rms_digital']
     p = apply_calibration_to_signal(highestPitch, cal['S'])  # p is now in Pa
+    result = apply_vibTremorDecision_rolling_harmonics(p, samplerate, model, refRMS, meanFreq,
+                                              window_duration=1.0, step_duration=0.01,
+                                              max_freq=8000, calibrated=calibration)
+
+    vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent, vibExtentPa_roll, vibExtentSPL_roll, harmonicSPL_mean  = result
+
+    # Example: visualize one test file
+    if prompt != 'go':
+        visualize_signal_and_harmonics(
+            signal_pa=p,
+            fs=samplerate,
+            f0=meanFreq,
+            vibExtent_f0=vibExtent_f0,
+            harmonics=np.arange(1, 5),
+            bandwidth=40,
+            target_loudness=-23.0,
+            time_window=None#(0, 0.2)  # optional zoom
+        )
+
+
 
     df_vibrato = process_file(p, samplerate, meanFreq, idNum, vibRate=vibRate_f0, vibExtent=vibExtent_f0)
     # print(df_vibrato)
@@ -2727,7 +2970,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
               'vibExtentSPL_roll':vibExtentSPL_roll,
               'harmonicSPL_mean':harmonicSPL_mean,
               'vibExtent2_SPL':df_vibrato.loc[origMask, 'extent_spl'].iloc[0],
-              'vibExtent2_SPL':df_vibrato.loc[normMask0, 'extent_spl'].iloc[0],
+              'vibExtent2_SPLnorm':df_vibrato.loc[normMask0, 'extent_spl'].iloc[0],
               'vibExtent_harm':df_vibrato.loc[harmMask,'extent_spl'],
               'vibExtent_hNorm':df_vibrato.loc[normMask1,'extent_spl'],
               'calibration':calibration
@@ -2745,18 +2988,20 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     # if wavFilename == 'D:\\Post-Covid Audio\\00591&2024_11_18&test2.wav':
     # visualizeResultsFull(wavFilename, refRMS, vibRate=vibRate_f0)
     # plot_hilbert_envelope(highestPitch, samplerate, meanFreq, bandwidth=20)
-    # prompt = input("Press Enter to continue, q to quit...")
+
+    df = pd.concat([df, pd.DataFrame.from_records([resultDict])])
+    # if prompt != "go":
+        # prompt = input("Press Enter to continue, q to quit...")
     # if prompt == 'q':
        # break
-    df = pd.concat([df, pd.DataFrame.from_records([resultDict])])
-    plt.close('all')
+    # plt.close('all')
     # vibratoFreq3 = vibratoCalc3(highestPitch, samplerate)
     # print('id: ' + str(df.loc[i].loc['id']) + 
          # ', Vibrato Rate: ' + str(round(vibRate_f0, 2))+ 
          # ' Hz')#, Vibrato Percentage: ' + str(round(vibratoPercentage, 2)) + 
     #      ', Vibrato Std: ' + str(round(vibratoStd,2)) +
     #      ', Vibrato Ampitude: ' + str(round(amplitudeCents,2)))
-df.to_pickle('vib20251110cal.pkl')
+df.to_pickle('vib20251111.pkl')
 
 plt.close('all')
 #Plot scatterplots:
@@ -4336,3 +4581,89 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# --- Parameters ---
+bin_size = 500  # Hz
+max_freq = 5000
+bins = np.arange(0, max_freq + bin_size, bin_size)
+bin_labels = [f"{int(bins[i])}-{int(bins[i+1])} Hz" for i in range(len(bins)-1)]
+
+# --- Storage for bin stats ---
+bin_means = np.zeros(len(bins)-1)
+bin_sems = np.zeros(len(bins)-1)
+bin_vib_extent = np.zeros(len(bins)-1)
+
+# --- Plot ---
+plt.figure(figsize=(12,6))
+# --- Loop through bins ---
+for i in range(len(bins)-1):
+    f_low, f_high = bins[i], bins[i+1]
+    
+    # Collect all values from recordings that fall in this frequency range
+    values_spl = []
+    values_vib = []
+    mask = df['calibration'].values
+    for idx, row in df[mask].iterrows():
+        f0 = row['meanFreq']
+        freqs = f0 * np.arange(1, len(row['harmonicSPL_mean'])+1)
+        spl = np.array(row['harmonicSPL_mean'], dtype=float)
+        vib = np.array(row['vibExtentSPL_roll'], dtype=float)
+        
+        mask = (freqs >= f_low) & (freqs < f_high)
+        values_spl.extend(spl[mask])
+        values_vib.extend(vib[mask])
+    
+    values_spl = np.array(values_spl)
+    values_vib = np.array(values_vib)
+    
+    if len(values_spl) > 0:
+        bin_means[i] = np.nanmean(values_spl)
+        bin_sems[i] = np.nanstd(values_spl) / np.sqrt(np.sum(~np.isnan(values_spl)))
+        bin_vib_extent[i] = np.nanmean(values_vib)
+    else:
+        bin_means[i] = np.nan
+        bin_sems[i] = np.nan
+        bin_vib_extent[i] = np.nan
+
+
+# plt.errorbar(bin_labels, bin_means, yerr=bin_vib_extent/2, fmt='-o', capsize=4, color='tab:red', label='Mean ± Vibrato Extent')
+for i in range(len(bins)-1):
+    f_low, f_high = bins[i], bins[i+1]
+    
+    # Collect all values from recordings that fall in this frequency range
+    values_spl = []
+    values_vib = []
+    mask = ~df['calibration'].values
+    for idx, row in df[mask].iterrows():
+        f0 = row['meanFreq']
+        freqs = f0 * np.arange(1, len(row['harmonicSPL_mean'])+1)
+        spl = np.array(row['harmonicSPL_mean'], dtype=float)
+        vib = np.array(row['vibExtentSPL_roll'], dtype=float)
+        
+        mask = (freqs >= f_low) & (freqs < f_high)
+        values_spl.extend(spl[mask])
+        values_vib.extend(vib[mask])
+    
+    values_spl = np.array(values_spl)
+    values_vib = np.array(values_vib)
+    
+    if len(values_spl) > 0:
+        bin_means[i] = np.nanmean(values_spl)
+        bin_sems[i] = np.nanstd(values_spl) / np.sqrt(np.sum(~np.isnan(values_spl)))
+        bin_vib_extent[i] = np.nanmean(values_vib)
+    else:
+        bin_means[i] = np.nan
+        bin_sems[i] = np.nan
+        bin_vib_extent[i] = np.nan
+plt.errorbar(bin_labels, bin_means, yerr=bin_vib_extent/2, fmt='-o', capsize=4, color='tab:red', label='Normalized Mean ± Vibrato Extent')
+plt.xticks(rotation=45)
+plt.xlabel("Frequency Bin (Hz)")
+plt.ylabel("SPL [dB]")
+plt.title("Loudness Normalized Harmonic SPL by Frequency Bin with Vibrato Extent")
+plt.grid(alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.show()
