@@ -3927,7 +3927,8 @@ def instant_spl_from_pa(p):
 
 # 1) Compute calibration factor from your calibration file:
 
-wavFilename = "00575&2024_12_09&test2.wav"
+# wavFilename = "00575&2024_12_09&test2.wav"
+
 dBfilename = wavFilename[:-9] + "94dB.wav"
 samplerate, middleTrial = selectMiddleTrial(wavFilename)
 samplerate, highestPitch, maxFreq, meanFreq = isolateHighestPitch50MF(samplerate, middleTrial, gender=geschlecht)
@@ -4667,3 +4668,10 @@ plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+
+###MADDE Untersuchung
+fs, signal = read(r'C:\Users\Reuben\Downloads\329HzRate5_5Extent50.wav')
+visualize_signal_and_harmonics(signal.astype(float), fs, 329, 50)
+fs, signal = read(r'C:\Users\Reuben\Downloads\659HzRate5_5Extent50.wav')
+visualize_signal_and_harmonics(signal.astype(float), fs, 659, 50)
