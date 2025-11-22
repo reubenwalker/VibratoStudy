@@ -2711,7 +2711,8 @@ import pandas as pd
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.model_selection import StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier
-vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
+# vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
+vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
 #Convert (peak-to-peak) cents to mean-to-peak
 vibRatings.loc[:,'EXTENT (CENTS)'] = vibRatings['EXTENT (CENTS)']/2
 
@@ -2852,7 +2853,8 @@ prompt = "go"
 for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     wavFilename = i#random.choice(singingSamples)#"0081&2017_11_08&test2.wav"#"0006&2014_07_10&Test 2.wav"#"0081&2017_11_08&test2.wav"#i#df.loc[i].loc['newFilename']#df.sample()['newFilename'].iloc[0]# candFiles[i]
     #Corrupted Files
-    if wavFilename in ['C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0011&2004_03_09&TEST2.wav',
+    if wavFilename in ['C:\\Users\\Walker\\Documents\\Verlaufsuntersuchung\\Balko, Semeli&2009_11_17&test2.wav',
+                       'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0011&2004_03_09&TEST2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0038&2004_03_16&TEST2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0055&2005_02_01&test2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0101&2004_03_09&TEST2.wav',
@@ -2864,10 +2866,10 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     geschlecht = np.nan#df.loc[i].loc['geschlecht']
     samplerate, data = read(wavFilename)
     duration = len(data)/samplerate #seconds
-    # if duration < 0.2:
-        # continue
+    if duration < 0.2:
+        continue
     trialNum = wavFilename.split('\\')[-1][-5]
-    idNum = int(wavFilename.split('\\')[-1].split('&')[0])
+    idNum = wavFilename.split('\\')[-1].split('&')[0]#int(wavFilename.split('\\')[-1].split('&')[0])
     date = wavFilename.split('\\')[-1].split('&')[1]
     
     # if trialNum == 'B':
@@ -2912,7 +2914,8 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     #tremorRate = tremorRateCalc(highestPitch, samplerate)
     # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp = vibTremorDecision(highestPitch, samplerate, model)
     # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent = apply_vibTremorDecision_rolling(highestPitch, samplerate, model, refRMS, window_duration=1)
-    dummyFilename = r"C:\Users\Reuben\Documents\Code\Promotionsvorhaben\Sandbox\00575&2024_05_17&94dB.wav"
+    # dummyFilename = r"C:\Users\Reuben\Documents\Code\Promotionsvorhaben\Sandbox\00575&2024_05_17&94dB.wav"
+    dummyFilename = r"Adamik, András&2024_01_04&94dB.wav"
     dBfilename = wavFilename[:-9] + "94dB.wav"
     try:
         cal = compute_calibration_factor(dBfilename, fs_expected=samplerate, tone_freq=1000.0)
@@ -3001,7 +3004,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
          # ' Hz')#, Vibrato Percentage: ' + str(round(vibratoPercentage, 2)) + 
     #      ', Vibrato Std: ' + str(round(vibratoStd,2)) +
     #      ', Vibrato Ampitude: ' + str(round(amplitudeCents,2)))
-df.to_pickle('vib20251111.pkl')
+    df.to_pickle('vib20251112.pkl')
 
 plt.close('all')
 #Plot scatterplots:
