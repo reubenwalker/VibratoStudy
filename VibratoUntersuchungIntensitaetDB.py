@@ -994,8 +994,9 @@ def showPitchContour(wavArray, samplerate):
     #Probably need upper frequency bound 2x potential sung frequency
     pitch = call(sound, "To Pitch", 0.0, 60, 1000) 
     pitch_contour = pitch.selected_array['frequency']
-    plt.subplots(1)
-    plot(pitch_contour)
+    # plt.subplots(1)
+    # plot(pitch_contour)
+    return pitch_contour
 
 #Visually check middle sample against full sample
 def visualCheckSelection(sample0, beginSample, endSample):
@@ -2381,7 +2382,59 @@ def analyze_vibrato(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="
         })
 
     return pd.DataFrame(results)
+    
+def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="unknown", max_freq=8000):
+    results = []
 
+    # --- RMS vibrato extent (unfiltered)
+    env_rms = compute_rms_envelope(signal_pa, fs, vibRate_f0)
+    vib_extent_rms_db = compute_vibrato_extent(env_rms, fs, vibRate_f0)
+    mean_spl_rms = 20 * np.log10(np.mean(np.abs(signal_pa)) / P_REF + 1e-12)
+
+    results.append({
+        "file_id": file_id,
+        "harmonic": 0,
+        "f0_hz": f0,
+        "extent_pa": np.nan,
+        "extent_spl": vib_extent_rms_db,
+        "mean_spl": mean_spl_rms,
+        "metric": "RMS Vibrato Extent",
+        "type": "original"
+    })
+
+    f0 = float(f0)  # ensure scalar
+
+    max_harmonic = int(np.floor(max_freq / f0))
+    harmonics = np.arange(1, max_harmonic+1)
+    vibRate = np.nan
+    # --- Instantaneous amplitude for harmonics
+    for h in harmonics:
+        f_h = h * f0
+        vib_cents = vibExtent_f0  # expected vibrato extent
+        bandwidth_h = f0#2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
+        filtered = bandpass_filter(signal_pa, fs, f_h, bandwidth_h)
+
+        env_pa = np.abs(hilbert(filtered))
+        env_spl = 20 * np.log10(env_pa / P_REF + 1e-12)
+        if np.isnan(vibRate):
+            vibRate = autocorrVib3HzLocal(env_pa,fs)
+        extent_pa = compute_vibrato_extent(env_pa, fs, vibRate_f0)
+        extent_spl = compute_vibrato_extent(env_spl, fs, vibRate_f0)
+        mean_spl = np.median(env_spl)  # mean SPL of this harmonic
+
+        results.append({
+            "file_id": file_id,
+            "harmonic": h,
+            "f0_hz": f_h,
+            "extent_pa": extent_pa,
+            "extent_spl": extent_spl,
+            "mean_spl": mean_spl,
+            "vibRate_amp":vibRate,
+            "metric": "Instantaneous Amplitude",
+            "type": "original"
+        })
+
+    return pd.DataFrame(results)
 
 # === LOAD SIGNAL + NORMALIZE ===
 def process_file(signal_pa, fs, f0, file_id="unknown", vibRate=6, vibExtent=100):
@@ -2392,9 +2445,24 @@ def process_file(signal_pa, fs, f0, file_id="unknown", vibRate=6, vibExtent=100)
     signal_norm = pyln.normalize.loudness(signal_pa, loudness, TARGET_LUFS)
 
     df_orig = analyze_vibrato(signal_pa, fs, f0, vibRate, vibExtent, file_id)
+    df_orig["type"] = "original"
     df_norm = analyze_vibrato(signal_norm, fs, f0, vibRate, vibExtent, file_id)
     df_norm["type"] = "normalized"
     return pd.concat([df_orig, df_norm], ignore_index=True)
+
+def process_file_amp(signal_pa, fs, f0, file_id="unknown", vibRate=6, vibExtent=100):
+    if np.isnan(vibRate):
+        vibRate = 5.5
+    meter = pyln.Meter(fs)
+    loudness = meter.integrated_loudness(signal_pa)
+    signal_norm = pyln.normalize.loudness(signal_pa, loudness, TARGET_LUFS)
+
+    df_orig = analyze_vibrato_amp(signal_pa, fs, f0, vibRate, vibExtent, file_id)
+    df_orig["type"] = "original"
+    df_norm = analyze_vibrato_amp(signal_norm, fs, f0, vibRate, vibExtent, file_id)
+    df_norm["type"] = "normalized"
+    return pd.concat([df_orig, df_norm], ignore_index=True)
+
 
 P_REF = 20e-6  # Pa
 
@@ -2853,7 +2921,7 @@ prompt = "go"
 for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     wavFilename = i#random.choice(singingSamples)#"0081&2017_11_08&test2.wav"#"0006&2014_07_10&Test 2.wav"#"0081&2017_11_08&test2.wav"#i#df.loc[i].loc['newFilename']#df.sample()['newFilename'].iloc[0]# candFiles[i]
     #Corrupted Files
-    if wavFilename in ['C:\\Users\\Walker\\Documents\\Verlaufsuntersuchung\\Balko, Semeli&2009_11_17&test2.wav',
+    if wavFilename in ['C:\\Users\\Walker\\Documents\\Verlaufsuntersuchung2025\\Balko, Semeli&2009_11_17&test2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0011&2004_03_09&TEST2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0038&2004_03_16&TEST2.wav',
                        'C:\\Users\\Reuben\\Documents\\Code\\Promotionsvorhaben\\Sandbox\\0055&2005_02_01&test2.wav',
@@ -2921,6 +2989,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
         cal = compute_calibration_factor(dBfilename, fs_expected=samplerate, tone_freq=1000.0)
         calibration = True
     except:
+        continue
         cal = compute_calibration_factor(dummyFilename, fs_expected=48000, tone_freq=1000.0)
         calibration = False
     # cal = compute_calibration_factor(dummyFilename, fs_expected=48000, tone_freq=1000.0)
@@ -2948,7 +3017,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
 
 
 
-    df_vibrato = process_file(p, samplerate, meanFreq, idNum, vibRate=vibRate_f0, vibExtent=vibExtent_f0)
+    df_vibrato = process_file_amp(p, samplerate, meanFreq, idNum, vibRate=vibRate_f0, vibExtent=vibExtent_f0)
     # print(df_vibrato)
     origMask = ((df_vibrato['type'] =='original') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
     normMask0 = ((df_vibrato['type'] =='normalized') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
@@ -2959,6 +3028,8 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
               'date':date,
               'trialNum':trialNum,
               'duration':duration,
+              'fs':samplerate,
+              'signal':p,
               'sampleDuration50':sampleDuration50,
               'meanFreq':meanFreq,
               'ref_RMS':refRMS,
@@ -2974,6 +3045,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
               'harmonicSPL_mean':harmonicSPL_mean,
               'vibExtent2_SPL':df_vibrato.loc[origMask, 'extent_spl'].iloc[0],
               'vibExtent2_SPLnorm':df_vibrato.loc[normMask0, 'extent_spl'].iloc[0],
+              'vibRate_amp_harm':df_vibrato.loc[harmMask,'vibRate_amp'],
               'vibExtent_harm':df_vibrato.loc[harmMask,'extent_spl'],
               'vibExtent_hNorm':df_vibrato.loc[normMask1,'extent_spl'],
               'calibration':calibration
@@ -3004,7 +3076,282 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
          # ' Hz')#, Vibrato Percentage: ' + str(round(vibratoPercentage, 2)) + 
     #      ', Vibrato Std: ' + str(round(vibratoStd,2)) +
     #      ', Vibrato Ampitude: ' + str(round(amplitudeCents,2)))
-    df.to_pickle('vib20251112.pkl')
+    df.to_pickle('vib20251213.pkl')
+
+def expandEntry(entry, i):
+    try:
+        return entry.iloc[i]
+    except IndexError:
+        return np.nan
+for i in range(30):
+    df[f"vibExtent_h{i}"] = df['vibExtent_harm'].apply(lambda x: expandEntry(x,i))
+
+def expandEntry(entry, i):
+    try:
+        return entry.iloc[i]
+    except IndexError:
+        return np.nan
+for i in range(30):
+    df[f"vibRate_amp_h{i}"] = df['vibRate_amp_harm'].apply(lambda x: expandEntry(x,i))
+
+import numpy as np
+import pandas as pd
+
+target_freqs = [811, 1520, 2496, 3429]
+
+def vib_extent_nearest_freq(row, target_freq):
+    mean_f0 = row['meanFreq']
+    
+    # harmonic numbers 1..29
+    harmonics = np.arange(1, 30)
+    
+    # harmonic frequencies
+    harmonic_freqs = harmonics * mean_f0
+    
+    # find closest harmonic
+    idx = np.argmin(np.abs(harmonic_freqs - target_freq))
+    h = harmonics[idx]
+    
+    return row[f'vibExtent_h{h}']
+
+df['vibExtent_f1'] = df.apply(vib_extent_nearest_freq, axis=1, target_freq=811)
+df['vibExtent_f2'] = df.apply(vib_extent_nearest_freq, axis=1, target_freq=1520)
+df['vibExtent_f3'] = df.apply(vib_extent_nearest_freq, axis=1, target_freq=2496)
+df['vibExtent_f4'] = df.apply(vib_extent_nearest_freq, axis=1, target_freq=3429)
+
+def nearest_harmonic(row, target_freq):
+    harmonics = np.arange(1, 30)
+    harmonic_freqs = harmonics * row['meanFreq']
+    return harmonics[np.argmin(np.abs(harmonic_freqs - target_freq))]
+
+df['vibExtent_f1_h'] = df.apply(nearest_harmonic, axis=1, target_freq=811)
+df['vibExtent_f2_h'] = df.apply(nearest_harmonic, axis=1, target_freq=1520)
+df['vibExtent_f3_h'] = df.apply(nearest_harmonic, axis=1, target_freq=2496)
+df['vibExtent_f4_h'] = df.apply(nearest_harmonic, axis=1, target_freq=3429)
+
+cols = ['vibExtent_f1', 'vibExtent_f2', 'vibExtent_f3', 'vibExtent_f4']
+for i in range(1,13):
+    cols.append(f'vibExtent_h{i}')
+corrs = df[cols].corrwith(df['vibExtent2_SPL'])
+print(corrs.sort())
+
+
+
+cols_amp = ['vibRate_f0','vibRate_amp']
+for i in range(1,13):
+    cols_amp.append(f'vibRate_amp_h{i}')
+corrs = df[cols_amp].corr()
+print(corrs)#.sort_values(ascending=False))
+
+import seaborn as sns
+import numpy as np
+
+ax = sns.scatterplot(
+    x='vibRate_f0',
+    y='vibRate_amp_h1',
+    hue='Vibrato-Umfang f0 (dB)',
+    data=df.rename(columns={'vibExtent_h1':'Vibrato-Umfang f0 (dB)'})
+)
+
+# Determine plot limits
+lims = [
+    min(ax.get_xlim()[0], ax.get_ylim()[0]),
+    max(ax.get_xlim()[1], ax.get_ylim()[1])
+]
+
+# Plot y = x line
+ax.plot(lims, lims, 'r-', linewidth=2)
+
+# Ensure both axes use the same limits
+ax.set_xlim(lims)
+ax.set_ylim(lims)
+ax.set_title('Vibrato-Rate (AM) gegen Vibrato-Rate (FM)')
+ax.set_xlabel('Vibrato-Rate (Pitch Contour)')
+ax.set_ylabel('Vibrato-Rate (Amplitudenhüllkurve gefiltert um f0)')
+plt.show()
+    
+### 10 samples
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import hilbert
+
+def envelope_to_spl(envelope_pa, p_ref=20e-6):
+    return 20 * np.log10(envelope_pa / p_ref + 1e-12)
+
+def compute_vibrato_extent_cents_half(pitch_contour, fs_contour, vibRate):
+    """
+    Estimate FM vibrato extent in cents (half peak-to-valley)
+    using peak-valley analysis.
+    """
+    if np.isnan(vibRate):
+        return np.nan
+
+    wavelength = int(fs_contour / vibRate)
+    peaks, _ = find_peaks(pitch_contour, distance=wavelength//2)
+    valleys, _ = find_peaks(-pitch_contour, distance=wavelength//2)
+    peaks, valleys = np.sort(peaks), np.sort(valleys)
+    
+    pairs = []
+    for p in peaks:
+        v = valleys[valleys < p]
+        if len(v):
+            pairs.append((p, v[-1]))
+    
+    half_cent_diffs = []
+    for p, v in pairs:
+        f_p, f_v = pitch_contour[p], pitch_contour[v]
+        if f_p > 0 and f_v > 0:
+            full_cents = 1200 * np.log2(f_p / f_v)
+            half_cent_diffs.append(full_cents / 2)  # half peak-to-valley
+    
+    return np.mean(half_cent_diffs) if len(half_cent_diffs) else np.nan
+
+
+def plot_fm_am_qc_aligned(
+    signal_pa,
+    fs_audio,
+    pitch_contour,
+    pitch_times,
+    fs_contour,
+    filtered_h1,
+    time_window=None,
+    subject_num=''
+    
+):
+    # --- Time mask in pitch domain ---
+    if time_window is not None:
+        mask = (pitch_times >= time_window[0]) & (pitch_times <= time_window[1])
+    else:
+        mask = slice(None)
+
+    pitch_seg = pitch_contour[mask]
+    t_seg = pitch_times[mask]
+
+    # ---------------- FM ----------------
+    vibRate_fm = autocorrVib3HzLocal(pitch_seg, fs_contour)
+
+    vibExtent_fm = compute_vibrato_extent_cents_half(pitch_seg, fs_contour, vibRate_fm)
+
+    # ---------------- AM (H1 envelope in SPL) ----------------
+    env_h1_pa = np.abs(hilbert(filtered_h1))
+
+    # Convert to SPL before resampling
+    env_h1_spl = envelope_to_spl(env_h1_pa)
+
+    env_resampled = resample_to_pitch_time(
+        env_h1_spl,
+        fs_audio,
+        pitch_times
+    )
+
+    env_seg = env_resampled[mask]
+
+    vibRate_am = autocorrVib3HzLocal(
+        env_seg,
+        fs_contour
+    )
+
+    vibExtent_am = (
+        compute_vibrato_extent(
+            env_seg,
+            fs_contour,
+            vibRate_am
+        )
+        if not np.isnan(vibRate_am) else np.nan
+    )
+
+    # ---------------- Phase ----------------
+    phase_lag = phase_shift(
+        pitch_seg,
+        env_seg,
+        fs_contour
+    )
+
+    # ---------------- Plot ----------------
+    fig, ax1 = plt.subplots(figsize=(12, 4))
+
+    ax1.plot(t_seg, pitch_seg, color='tab:blue', label='Pitch (FM)')
+    ax1.set_ylabel("Frequency [Hz]", color='tab:blue')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+    ax2 = ax1.twinx()
+    ax2.plot(t_seg, env_seg, color='tab:red', alpha=0.7, label='H1 envelope (AM)')
+    ax2.set_ylabel("SPL [dB]", color='tab:red')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+
+    text = (
+        f"FM rate: {vibRate_fm:.2f} Hz | FM extent: {vibExtent_fm:.2f} Cents\n"
+        f"AM rate: {vibRate_am:.2f} Hz | AM extent: {vibExtent_am:.2f} dB\n"
+        f"Phase lag (AM–FM): {phase_lag*1000:.1f} ms"
+    )
+
+    ax1.text(
+        0.01, 0.98, text,
+        transform=ax1.transAxes,
+        va='top', ha='left',
+        bbox=dict(facecolor='white', alpha=0.85, edgecolor='none')
+    )
+
+    ax1.set_xlabel("Time [s]")
+    ax1.set_title(f"FM–AM Vibrato (time-aligned), Sample {subject_num}")
+    fig.tight_layout()
+    plt.savefig(f'Sample{subject_num}.png')
+    plt.show()
+
+from scipy.interpolate import interp1d
+
+def resample_to_pitch_time(env, fs_audio, pitch_times):
+    t_audio = np.arange(len(env)) / fs_audio
+
+    interp_fun = interp1d(
+        t_audio,
+        env,
+        kind='linear',
+        bounds_error=False,
+        fill_value=np.nan
+    )
+
+    return interp_fun(pitch_times)
+
+def showPitchContour(wavArray, samplerate):
+    sound = Sound(wavArray, samplerate)
+    pitch = call(sound, "To Pitch", 0.0, 60, 1000)
+
+    pitch_contour = pitch.selected_array['frequency']
+    pitch_times = pitch.xs()  # time stamps in seconds
+    fs_contour = 1 / pitch.dx
+
+    return pitch_contour, pitch_times, fs_contour
+
+
+
+prompt = ''
+for i in range(10):
+    signal, fs, meanFreq, vibExtent_f0 = df.sample()[['signal','fs','meanFreq','vibExtent_f0']].iloc[0]
+    T = len(signal) / fs  # total duration in seconds
+    t_start = (T - 2.0) / 2         # start 1 second before the center
+    t_end = t_start + 2.0           # end 1 second after the center
+    time_window = (t_start, t_end)
+    bandwidth_h = meanFreq / 2.0#np.max([40,2 * f_h * (2**(vib_cents/1200) - 1) * 1.5])
+    filtered_orig = bandpass_filter(signal, fs, meanFreq, bandwidth_h)
+    # env_orig = np.abs(hilbert(filtered_orig))
+    # env_orig_spl = 20 * np.log10(env_orig / P_REF + 1e-12)
+    if prompt == 'q':
+        break
+    pitch_contour, pitch_times, fs_contour = showPitchContour(signal, fs)
+    # env_orig_resampled = resample_to_pitch_time(env_orig_spl, fs, pitch_times) 
+    plot_fm_am_qc_aligned(
+        signal,
+        fs,
+        pitch_contour,
+        pitch_times,
+        fs_contour,
+        filtered_orig,
+        time_window=time_window,
+        subject_num=i
+    )
+
+    prompt = input('Enter q to quit, otherwise any key')
 
 plt.close('all')
 #Plot scatterplots:
