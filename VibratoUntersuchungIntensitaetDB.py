@@ -3206,6 +3206,25 @@ def compute_vibrato_extent_cents_half(pitch_contour, fs_contour, vibRate):
     
     return np.mean(half_cent_diffs) if len(half_cent_diffs) else np.nan
 
+def phase_shift(x, y, fs, vibRate_fm):
+    x = x - np.nanmean(x)
+    y = y - np.nanmean(y)
+
+    corr = np.correlate(x, y, mode='full')
+    lags = np.arange(-len(x) + 1, len(x)) / fs
+
+    phase_lag_sec = lags[np.argmax(corr)]
+
+    phase_deg = (360 * vibRate_fm * phase_lag_sec) % 360
+    if phase_deg > 180:
+        phase_deg -= 360
+    if phase_deg < -180:
+        phase_deg += 360
+
+    phase_ms = phase_lag_sec * 1000
+
+    return phase_deg, phase_ms, phase_lag_sec
+
 
 def plot_fm_am_qc_aligned(
     signal_pa,
@@ -3261,10 +3280,11 @@ def plot_fm_am_qc_aligned(
     )
 
     # ---------------- Phase ----------------
-    phase_lag = phase_shift(
+    phase_deg, phase_ms, phase_lag_sec = phase_shift(
         pitch_seg,
         env_seg,
-        fs_contour
+        fs_contour,
+        vibRate_fm
     )
 
     # ---------------- Plot ----------------
@@ -3282,7 +3302,7 @@ def plot_fm_am_qc_aligned(
     text = (
         f"FM rate: {vibRate_fm:.2f} Hz | FM extent: {vibExtent_fm:.2f} Cents\n"
         f"AM rate: {vibRate_am:.2f} Hz | AM extent: {vibExtent_am:.2f} dB\n"
-        f"Phase lag (AM–FM): {phase_lag*1000:.1f} ms"
+        f"Phase lag (AM–FM): {phase_deg:.1f}°, {phase_ms:.1f} ms"
     )
 
     ax1.text(
@@ -3296,7 +3316,8 @@ def plot_fm_am_qc_aligned(
     ax1.set_title(f"FM–AM Vibrato (time-aligned), Sample {subject_num}")
     fig.tight_layout()
     plt.savefig(f'Sample{subject_num}.png')
-    plt.show()
+    # plt.show()
+    return vibRate_fm, vibRate_am, phase_deg
 
 from scipy.interpolate import interp1d
 
@@ -3324,10 +3345,10 @@ def showPitchContour(wavArray, samplerate):
     return pitch_contour, pitch_times, fs_contour
 
 
-
+mask = df['vibPercent'] == 1
 prompt = ''
 for i in range(10):
-    signal, fs, meanFreq, vibExtent_f0 = df.sample()[['signal','fs','meanFreq','vibExtent_f0']].iloc[0]
+    signal, fs, meanFreq, vibExtent_f0 = df[mask].sample()[['signal','fs','meanFreq','vibExtent_f0']].iloc[0]
     T = len(signal) / fs  # total duration in seconds
     t_start = (T - 2.0) / 2         # start 1 second before the center
     t_end = t_start + 2.0           # end 1 second after the center
@@ -3350,8 +3371,62 @@ for i in range(10):
         time_window=time_window,
         subject_num=i
     )
+    plt.close('all')
 
-    prompt = input('Enter q to quit, otherwise any key')
+df = df.reset_index(drop=True)
+mask = df['vibPercent'] == 1
+for i in range(df[mask].shape[0]):
+    idx = df[mask].index[i]  
+    signal, fs, meanFreq, vibExtent_f0 = df.loc[idx, ['signal','fs','meanFreq','vibExtent_f0']]
+    T = len(signal) / fs  # total duration in seconds
+    t_start = (T - 2.0) / 2         # start 1 second before the center
+    t_end = t_start + 2.0           # end 1 second after the center
+    time_window = (t_start, t_end)
+    bandwidth_h = meanFreq / 2.0#np.max([40,2 * f_h * (2**(vib_cents/1200) - 1) * 1.5])
+    filtered_orig = bandpass_filter(signal, fs, meanFreq, bandwidth_h)
+    # env_orig = np.abs(hilbert(filtered_orig))
+    # env_orig_spl = 20 * np.log10(env_orig / P_REF + 1e-12)
+    if prompt == 'q':
+        break
+    pitch_contour, pitch_times, fs_contour = showPitchContour(signal, fs)
+    # env_orig_resampled = resample_to_pitch_time(env_orig_spl, fs, pitch_times) 
+    df.loc[idx, ['vibRate_fm', 'vibRate_am', 'phase_deg']] = plot_fm_am_qc_aligned(
+        signal,
+        fs,
+        pitch_contour,
+        pitch_times,
+        fs_contour,
+        filtered_orig,
+        time_window=time_window,
+        subject_num=i
+    )
+    plt.close('all')
+    
+    # prompt = input('Enter q to quit, otherwise any key')
+
+mask2 = ((df['vibPercent'] == 1) & (df['vibRate_fm'] == df['vibRate_am']))
+###Display phase relationships:
+phase_deg = (
+    df.loc[mask2, 'phase_deg']
+      .astype(float)
+      .dropna()
+      .to_numpy()
+)
+
+theta = np.deg2rad(phase_deg)
+
+# Small radial jitter
+r = 1 + 0.005 * np.random.randn(len(theta))
+
+plt.figure(figsize=(5, 5))
+ax = plt.subplot(111, projection='polar')
+ax.scatter(theta, r, alpha=0.7)
+ax.set_yticks([])
+ax.set_title("FM–AM Phase Relationship (radial jitter)")
+plt.show()
+
+for j in range(10):
+    print(random.choice(range(df[mask].shape[0])))
 
 plt.close('all')
 #Plot scatterplots:
@@ -4363,7 +4438,7 @@ import pandas as pd
 import numpy as np
 from scipy.signal import hilbert
 
-def compute_vibrato_extent(envelope, vibAmpGuess):
+def compute_vibrato_extent(envelope, samplerate, vibAmpGuess):
     wavelength = 1.0 / vibAmpGuess * samplerate
     window = int(np.floor(wavelength * 0.75))
     if window <= 0:
@@ -4671,7 +4746,7 @@ def compute_rms_envelope(x, fs, rate_hz=6, overlap=0.5):
         rms_env[center:center+step] = rms
     return rms_env
 
-def compute_vibrato_extent(envelope, fs, vibRate):
+def compute_vibrato_extent_db(envelope, fs, vibRate):
     """Estimate vibrato extent in linear (Pa) or SPL dB difference."""
     wavelength = int(fs / vibRate)
     peaks, _ = find_peaks(envelope, distance=wavelength//2)
@@ -4687,6 +4762,19 @@ def compute_vibrato_extent(envelope, fs, vibRate):
         if A_p > 0 and A_v > 0:
             db_diffs.append(20 * np.log10(A_p / A_v))
     return np.mean(db_diffs) if len(db_diffs) else np.nan
+
+def compute_vibrato_extent(envelope, samplerate, vibAmpGuess):
+    wavelength = 1.0 / vibAmpGuess * samplerate
+    window = int(np.floor(wavelength * 0.75))
+    if window <= 0:
+        window = 1
+
+    maxPeaks = find_peaks(envelope, distance=window)[0]
+    prominences = peak_prominences(envelope, maxPeaks)[0] / 2
+    meanAmp = envelope.mean()
+    extentEstimate = np.nanmedian(prominences[1:-1])
+    # extentEstimate = prominences.mean()
+    return extentEstimate
 
 # === MAIN ANALYSIS ===
 def analyze_vibrato(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="unknown"):
