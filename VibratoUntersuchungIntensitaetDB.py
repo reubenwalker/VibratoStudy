@@ -12,16 +12,16 @@
     #Middle 50% of sustained pitch
         #Beginning Frame
         #End Frame
-    #Rolling Mean/Std Vibrato Frequency
-    #Rolling Mean/Std Vibrato Amplitude
-#Save all four measures
-
-#Train K Nearest neighbors algorithm on stabil, labil, ohne
-#Rerun the classifier on 90% of sustained pitch. Only record values if they return as "stable"
-
-
-###Let's clean this up.
-
+#Extract pitch contour, mean fundamental frequency
+#Autocorrelation pitch contour, extract relative max lag, convert to: vibRate_f0
+#Calculate vibrato extent using find_peaks: vibExtent_f0
+#Perform Loudness Normalization
+#i = 1
+#while vibExtent_f0*i < meanf0:
+    #Filter signal around meanf0*i +- meanf0 /2
+    #Autcorrelation extract relative max lag, convert to: vibRate_amp
+    #calcuate extent using find_peaks: vibExtent_amp_i
+    #calculate extent using vibRate_f0: vibExtent_amp_i_force
 #Necessary Libraries:
 from parselmouth.praat import call
 from parselmouth import Sound 
@@ -2919,6 +2919,14 @@ singingSamples =  dreiklangFiles #dBFiles +   + #vokalFiles #+  + comeFiles voka
 prompt = "go"
 # indexArray = df.sort_values('Vibrato-Umfang (F_0)',ascending=False)[['Vibrato-Umfang (F_0)','id','date']].index
 for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
+###PSEUDOCODE
+
+#i = 1
+#while vibExtent_f0*i < meanf0:
+    #Filter signal around meanf0*i +- meanf0 /2
+    #Autcorrelation extract relative max lag, convert to: vibRate_amp
+    #calcuate extent using find_peaks: vibExtent_amp_i
+    #calculate extent using vibRate_f0: vibExtent_amp_i_force
     wavFilename = i#random.choice(singingSamples)#"0081&2017_11_08&test2.wav"#"0006&2014_07_10&Test 2.wav"#"0081&2017_11_08&test2.wav"#i#df.loc[i].loc['newFilename']#df.sample()['newFilename'].iloc[0]# candFiles[i]
     #Corrupted Files
     if wavFilename in ['C:\\Users\\Walker\\Documents\\Verlaufsuntersuchung2025\\Balko, Semeli&2009_11_17&test2.wav',
@@ -2968,10 +2976,8 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     refRMS = np.nan
     #Select Middle Trial
     samplerate, middleTrial = selectMiddleTrial(wavFilename)
-    #samplerate, finalTrial = selectFinalTrial(wavFilename)
-    #Isolate middle 50% of highest pitch
-    #samplerate, highestPitch, maxFreq = isolateHighestPitch50(samplerate, middleTrial)
-
+#Isolate middle 50 percent of sustained fifth:
+#Extract pitch contour, mean fundamental frequency
     samplerate, highestPitch, maxFreq, meanFreq = isolateHighestPitch50MF(samplerate, middleTrial, gender=geschlecht)
     #Let's record the duration of our highestPitch sample
     sampleDuration50 = highestPitch.size/samplerate
@@ -2996,6 +3002,14 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
     # calibration = False
     refRMS = cal['rms_digital']
     p = apply_calibration_to_signal(highestPitch, cal['S'])  # p is now in Pa
+    if calibration:
+        rms_db = 20*np.log10(rms(p)/P_REF)
+    else:
+        rms_db = np.nan
+
+#If actual calibration present, save RMS decibel
+#Autocorrelation, extract relative max lag, convert to: vibRate_f0
+#Calculate vibrato extent using find_peaks: vibExtent_f0               
     result = apply_vibTremorDecision_rolling_harmonics(p, samplerate, model, refRMS, meanFreq,
                                               window_duration=1.0, step_duration=0.01,
                                               max_freq=8000, calibrated=calibration)
@@ -3016,7 +3030,7 @@ for i in singingSamples:#[indexArray == 222]:  range(len(candFiles)):
         )
 
 
-
+#Perform Loudness Normalization
     df_vibrato = process_file_amp(p, samplerate, meanFreq, idNum, vibRate=vibRate_f0, vibExtent=vibExtent_f0)
     # print(df_vibrato)
     origMask = ((df_vibrato['type'] =='original') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
