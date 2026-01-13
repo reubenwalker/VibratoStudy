@@ -1068,10 +1068,44 @@ def vibAmpDB(amplitude_envelope, f_s_contour, vibFreq, windowFactor=0):
     #
     #ampCents = 1200*np.log(1 + ampEstimate/meanFreq)/np.log(2)
     extentDB = 20 * np.log10(extentEstimate / meanAmp)
+    extentPerc = extentEstimate / meanAmp
     #vibStd = 1200*np.log(1 + ampStd/meanFreq)/np.log(2)
     #if vibFreq == np.nan:
     #    extentDB = np.nan
     return extentDB#, vibStd # amplitude in cents
+    
+def vibAmpPec(amplitude_envelope, f_s_contour, vibFreq, windowFactor=0):
+    if np.isnan(vibFreq):
+        #vibFreq = 5.5
+        extentDB = np.nan
+        #print(str(extentDB))
+        return extentDB
+    wavelength = 1.0/vibFreq*f_s_contour # in frames
+    try:
+        window = math.floor(wavelength*windowFactor)
+    except ValueError:
+        window = math.floor(1.0/5.5*f_s_contour*0.75)
+    #
+    if window == 0:
+        window = 1
+    maxPeaks = find_peaks(amplitude_envelope, distance=window)[0]
+    prominences = scipy.signal.peak_prominences(amplitude_envelope, maxPeaks)[0]/2
+    #minPeaks = find_peaks(amplitude_envelope*-1,distance=window)[0]
+    #maxMean = amplitude_envelope[maxPeaks].mean()
+    #minMean = amplitude_envelope[minPeaks].mean()
+    #ampEstimate = (maxMean - minMean)/2 # in Hz
+    #Do not calculate with the first and final peaks.
+    extentEstimate = prominences[1:-1].mean()
+    meanAmp = amplitude_envelope.mean()
+    extentStd = prominences[1:-2].std()
+    #
+    #ampCents = 1200*np.log(1 + ampEstimate/meanFreq)/np.log(2)
+    extentDB = 20 * np.log10(extentEstimate / meanAmp)
+    extentPerc = extentEstimate / meanAmp
+    #vibStd = 1200*np.log(1 + ampStd/meanFreq)/np.log(2)
+    #if vibFreq == np.nan:
+    #    extentDB = np.nan
+    return extentPerc#, vibStd # amplitude in cents
 
 def vibTremor(wavFile, samplerate):
     ###CALCULATE vibRate
@@ -2779,8 +2813,8 @@ import pandas as pd
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.model_selection import StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier
-# vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
-vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
+vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
+# vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
 #Convert (peak-to-peak) cents to mean-to-peak
 vibRatings.loc[:,'EXTENT (CENTS)'] = vibRatings['EXTENT (CENTS)']/2
 
@@ -3357,6 +3391,35 @@ def showPitchContour(wavArray, samplerate):
     fs_contour = 1 / pitch.dx
 
     return pitch_contour, pitch_times, fs_contour
+
+
+def returnContour(data, samplerate,model):
+    ###CALCULATE vibRate
+    sound = Sound(data, samplerate)
+    #Creates PRAAT sound file from .wav array, default 44100 Hz sampling frequency?
+    # pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
+    pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
+    pitch_contour = pitch.selected_array['frequency']
+    # plt.plot(pitch_contour)
+    # plt.show()
+    # prompt = input("Press Enter to continue, q to quit...")
+    # if prompt == 'q':
+       # sys.exit()
+    #Calculate the contour's sample rate from the differing array sizes
+    f_s_contour = pitch.selected_array['frequency'].size/sound.values.size*sound.sampling_frequency
+    return pitch_contour, f_s_contour
+    
+def returnNormalized(signal, fs):
+    meter = pyln.Meter(fs)
+    loudness = meter.integrated_loudness(signal)
+    signal_norm = pyln.normalize.loudness(signal, loudness, TARGET_LUFS)
+    return signal_norm
+
+def returnEnvelope(data, samplerate,meanFreq):
+        bandwidth_h = meanFreq#2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
+        filtered = bandpass_filter(data, samplerate, meanFreq, bandwidth_h)
+        env_pa = np.abs(hilbert(filtered))
+        return env_pa, filtered, samplerate
 
 
 mask = df['vibPercent'] == 1
