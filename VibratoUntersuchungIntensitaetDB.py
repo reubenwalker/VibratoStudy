@@ -1074,7 +1074,7 @@ def vibAmpDB(amplitude_envelope, f_s_contour, vibFreq, windowFactor=0):
     #    extentDB = np.nan
     return extentDB#, vibStd # amplitude in cents
     
-def vibAmpPec(amplitude_envelope, f_s_contour, vibFreq, windowFactor=0):
+def vibAmpPerc(amplitude_envelope, f_s_contour, vibFreq, windowFactor=0):
     if np.isnan(vibFreq):
         #vibFreq = 5.5
         extentDB = np.nan
