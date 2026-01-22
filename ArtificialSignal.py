@@ -255,18 +255,18 @@ import numpy as np
 import pandas as pd
 
 # --- Sweep ranges ---
-f0s = [294, 659]
-vib_rates = np.arange(3.0, 8.5, 0.5)        # Hz
-vib_extents = np.arange(15.0, 75.0, 5.0)    # cents (or Hz if that's your definition)
-am_depth_percents = np.linspace(0.005, 0.025, 5)
-phase_offsets = np.array([0, 0.5*np.pi, np.pi, 1.5*np.pi])
+# f0s = [294, 659]
+# vib_rates = np.arange(3.0, 8.5, 0.5)        # Hz
+# vib_extents = np.arange(15.0, 75.0, 5.0)    # cents (or Hz if that's your definition)
+# am_depth_percents = np.linspace(0.005, 0.025, 5)
+# phase_offsets = np.array([0, 0.5*np.pi, np.pi, 1.5*np.pi])
 
 ###Simple
 f0s = [100]#, 659]
 
-vib_rates = [6]#np.arange(3.0, 8.5, 0.5)                # Hz
-vib_extents = np.arange(15.0, 75.0, 5.0)#20.0, 40.0, 60.0]         # cents
-am_depth_percents = [0.0]#, 0.01, 0.025]   # fraction of VibAmp
+vib_rates = np.arange(3.0, 8.5, 0.5)                # Hz
+vib_extents = [60]#np.arange(15.0, 75.0, 5.0)#20.0, 40.0, 60.0]         # cents
+am_depth_percents = [0.01]#, 0.01, 0.025]   # fraction of VibAmp
 
 phase_offsets = [0.0]#, np.pi]             # radians
 
@@ -296,12 +296,14 @@ for f0, vib_rate_fm, vib_extent_fm, vib_rate_am, am_pct, condition in itertools.
     elif condition == 'FM+AM':
         fm_phases = phase_offsets
         am_phases = phase_offsets
+        
 
     for fm_phase, am_phase in itertools.product(fm_phases, am_phases):
         if fm_phase == None:
             fm_phase = 0
         if am_phase == None:
             am_phase = 0
+        phaseDiff_gt = am_phase - fm_phase
         # --- Generate signal ---
         f_s = 10000
         VibratoSignal, ____ = generate_vibrato_signal(
@@ -326,7 +328,9 @@ for f0, vib_rate_fm, vib_extent_fm, vib_rate_am, am_pct, condition in itertools.
         envelope, filtered, f_s = returnEnvelope(VibratoSignal, f_s, meanFreq)
         vibRate_f0 = autocorrVib3HzLocal(pitch_contour, f_s_contour)
         vibExtent_f0 = vibAmp(pitch_contour, f_s_contour, vibRate_f0, 0.75)#window factor of 0.75 the wavelength
-        vibRate_amp = autocorrVib3HzLocal(envelope, f_s)
+        meanCentLogEnv = np.log(envelope + 1e-12)
+        meanCentLogEnv -= np.mean(meanCentLogEnv)
+        vibRate_amp = autocorrVib3HzLocal(meanCentLogEnv, f_s)
         vibExtent_amp = vibAmpPerc(envelope, f_s, vibRate_amp, 0.75)
         refRMS = np.nan
         result = apply_vibTremorDecision_rolling_harmonics(VibratoSignal, f_s, model, refRMS, meanFreq,
@@ -469,3 +473,11 @@ plt.ylabel('Harmonic envelope extent (AmpPercent)')
 plt.title('Harmonic Envelope AM Extent (AmpPercent) vs Vibrato Extent (AM, percent)')
 plt.savefig('harmonic_extent_vs_vibExtentAmp.png', dpi=300)
 plt.close()
+
+
+"""
+Strategy:
+To avoid period-doubling artifacts introduced by envelope rectification, 
+amplitude modulation rate was estimated from the mean-centered log-amplitude of the analytic signal, 
+which linearizes multiplicative modulation and preserves the fundamental modulation frequency.
+"""

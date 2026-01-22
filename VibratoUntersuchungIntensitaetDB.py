@@ -2813,8 +2813,8 @@ import pandas as pd
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.model_selection import StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier
-vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
-# vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
+# vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
+vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
 #Convert (peak-to-peak) cents to mean-to-peak
 vibRatings.loc[:,'EXTENT (CENTS)'] = vibRatings['EXTENT (CENTS)']/2
 
@@ -2904,6 +2904,12 @@ for name, model in models.items():
     std_acc = np.std(fold_accuracies)
     
     print(f"{name}: Mean Accuracy = {mean_acc:.3f} (+/- {std_acc:.3f})")
+
+with open('DecisionTree.pkl','wb') as f:
+    pickle.dump(model,f)
+
+with open('DecisionTree.pkl', 'rb') as f:
+    model = pickle.load(f)
 
 # vibratoDF = pd.read_csv("C:\Users\Reuben\Documents\Code\Promotionsvorhaben\Sandbox\VibratoUntersuchung.csv")
 #with open('classVib_Anfang_Retro.pkl', 'rb') as f:
