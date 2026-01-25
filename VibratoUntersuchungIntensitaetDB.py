@@ -3403,8 +3403,8 @@ def returnContour(data, samplerate,model):
     ###CALCULATE vibRate
     sound = Sound(data, samplerate)
     #Creates PRAAT sound file from .wav array, default 44100 Hz sampling frequency?
-    # pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
-    pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
+    pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
+    # pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
     pitch_contour = pitch.selected_array['frequency']
     # plt.plot(pitch_contour)
     # plt.show()
