@@ -2624,17 +2624,17 @@ def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_
     results = []
 
     # --- RMS vibrato extent (unfiltered)
-    env_rms = compute_rms_envelope(signal_pa, fs, vibRate_f0)
-    vib_extent_rms_db = compute_vibrato_extent(env_rms, fs, vibRate_f0)
-    mean_spl_rms = 20 * np.log10(np.mean(np.abs(signal_pa)) / P_REF + 1e-12)
+    # env_rms = compute_rms_envelope(signal_pa, fs, vibRate_f0)
+    # vib_extent_rms_db = compute_vibrato_extent(env_rms, fs, vibRate_f0)
+    # mean_spl_rms = 20 * np.log10(np.mean(np.abs(signal_pa)) / P_REF + 1e-12)
 
     results.append({
         "file_id": file_id,
         "harmonic": 0,
         "f0_hz": f0,
         "extent_pa": np.nan,
-        "extent_spl": vib_extent_rms_db,
-        "mean_spl": mean_spl_rms,
+        "extent_spl": np.nan,#vib_extent_rms_db,
+        "mean_spl": np.nan,#mean_spl_rms,
         "metric": "RMS Vibrato Extent",
         "type": "original"
     })
