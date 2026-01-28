@@ -165,7 +165,7 @@ import pandas as pd
 f0s = [294, 659]
 vib_rates = np.arange(3.5, 8.5, 1)        # Hz
 vib_extents = np.arange(15.0, 80.0, 20.0)    # cents (or Hz if that's your definition)
-am_depth_percents = np.linspace(0.005, 0.025, 5)
+am_depth_percents = np.linspace(0.05, 0.25, 5)
 phase_offsets = np.array([0, 0.5*np.pi, np.pi, 1.5*np.pi])
 
 ###Simple
@@ -379,7 +379,7 @@ def flip2Pi(x):
             x -= 2*np.pi
     return x
 dfPhase['phaseDiff_gt'] = dfPhase['phaseDiff_gt'].apply(lambda x: flip2Pi(x))
-dfPhase['
+dfPhase['phaseDiff'] = dfPhase['phaseDiff_gt'].apply(lambda x: flip2Pi(x))
 mask = dfPhase['condition'].str.contains('FM')
 plt.figure()
 plt.scatter(
@@ -454,12 +454,12 @@ for idx, row in df.iterrows():
     # signal_norm = returnNormalized(highestPitch, samplerate)
     # signal_downsample = downsample_audio(highestPitch, samplerate, f_s_contour)
     envelope, filtered, f_s = returnEnvelope(signal, f_s, meanFreq)
-    vibRate_f0 = autocorrVib3HzLocal(pitch_contour, f_s_contour)
-    # vibRate_f0 = fftVib3HzLocal(pitch_contour, f_s_contour)
+    # vibRate_f0 = autocorrVib3HzLocal(pitch_contour, f_s_contour)
+    vibRate_f0 = fftVib3HzLocal(pitch_contour, f_s_contour)
     vibExtent_f0, __ , __ = compute_vibrato_extent_cents(pitch_contour, f_s_contour, vibRate_f0, windowFactor=0.75)#window factor of 0.75 the wavelength
 
-    vibRate_amp = autocorrVib3HzLocal(envelope, f_s)
-    # vibRate_amp = fftVib3HzLocal(envelope, f_s)
+    # vibRate_amp = autocorrVib3HzLocal(envelope, f_s)
+    vibRate_amp = fftVib3HzLocal(envelope, f_s)
     vibExtent_amp = vibAmpPerc(envelope, f_s, vibRate_amp, 0.75)
     refRMS = np.nan
     # result = apply_vibTremorDecision_rolling_harmonics(VibratoSignal, f_s, model, refRMS, meanFreq,
@@ -649,3 +649,8 @@ for i in range(len(cols)):
 
 plt.tight_layout()
 plt.show()
+
+
+###Find outlier vibRate_f0
+results_df = 
+results_df[((results_df['vibRateFM_gt'].astype('float') > 6) & (results_df['vibRate_f0'].astype('float') < 5))].filename
