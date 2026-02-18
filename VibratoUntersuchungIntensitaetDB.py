@@ -466,7 +466,31 @@ def autocorrVib3HzLocal(pitch_contour, f_s_contour):
 
     return vibratoFreq
 
+def fftVib3HzLocal(envelope, fs):
+    # Remove DC offset (VERY important for envelope FFT)
+    env = envelope - np.mean(envelope)
 
+    # FFT
+    N = len(env)
+    fft_vals = np.fft.rfft(env)
+    freqs = np.fft.rfftfreq(N, d=1/fs)
+
+    magnitude = np.abs(fft_vals)
+
+    # Plot
+    # plt.figure(figsize=(8, 4))
+    # plt.plot(freqs, magnitude, color='black')
+    band_mask = (freqs >= 3) & (freqs <= 10)
+
+    if not np.any(band_mask):
+        return np.nan
+
+    band_mag = magnitude[band_mask]
+    band_freqs = freqs[band_mask]
+
+    # Peak frequency
+    peak_freq = band_freqs[np.argmax(band_mag)]
+    return peak_freq
 
 def vibratoCalcAmplitude(stableWavArray, samplerate):
 #0.5 s window, 3Hz autoCorr
@@ -998,6 +1022,35 @@ def showPitchContour(wavArray, samplerate):
     # plot(pitch_contour)
     return pitch_contour
 
+def returnContour(data, samplerate,model):
+    ###CALCULATE vibRate
+    sound = Sound(data, samplerate)
+    #Creates PRAAT sound file from .wav array, default 44100 Hz sampling frequency?
+    pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
+    # pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
+    pitch_contour = pitch.selected_array['frequency']
+    # plt.plot(pitch_contour)
+    # plt.show()
+    # prompt = input("Press Enter to continue, q to quit...")
+    # if prompt == 'q':
+       # sys.exit()
+    #Calculate the contour's sample rate from the differing array sizes
+    f_s_contour = pitch.selected_array['frequency'].size/sound.values.size*sound.sampling_frequency
+    return pitch_contour, f_s_contour
+    
+def returnNormalized(signal, fs):
+    meter = pyln.Meter(fs)
+    loudness = meter.integrated_loudness(signal)
+    signal_norm = pyln.normalize.loudness(signal, loudness, TARGET_LUFS)
+    return signal_norm
+
+def returnEnvelope(data, samplerate,meanFreq):
+        bandwidth_h = meanFreq#2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
+        filtered = bandpass_filter(data, samplerate, meanFreq, bandwidth_h)
+        env_pa = np.abs(hilbert(filtered))
+        return env_pa, filtered, samplerate
+
+
 #Visually check middle sample against full sample
 def visualCheckSelection(sample0, beginSample, endSample):
     plt.close('all')
@@ -1023,12 +1076,7 @@ def vibAmp(pitch_contour, f_s_contour, vibFreq, windowFactor=0):
     # print('Window: ', str(window))
     maxPeaks = find_peaks(pitch_contour, distance=window)[0]
     prominences = scipy.signal.peak_prominences(pitch_contour, maxPeaks)[0]/2
-    #minPeaks = find_peaks(pitch_contour*-1,distance=window)[0]
-    #maxMean = pitch_contour[maxPeaks].mean()
-    #minMean = pitch_contour[minPeaks].mean()
-    #ampEstimate = (maxMean - minMean)/2 # in Hz
-    #Do not calculate with the first and final peaks.
-    # ampEstimate = prominences[1:-1].mean() # With a 1/2 sec window, we might have 2 peaks.
+
     ampEstimate = prominences.mean()
     meanFreq = pitch_contour.mean()
     # ampStd = prominences[1:-2].std()
@@ -1373,6 +1421,104 @@ def vibTremorDecision3(wavFile, samplerate, model, refRMS): #rolling RMS
 
     return vibRate, vibExtent, vibAmpRate, vibAmpExtent, vibAmpExtent_SPL, vibAmpExtent_dB
 
+def vibTremorDecision3(wavFile, samplerate, model, refRMS): #rolling RMS
+    ###CALCULATE vibRate
+    sound = Sound(wavFile, samplerate)
+    #Creates PRAAT sound file from .wav array, default 44100 Hz sampling frequency?
+    # pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
+    pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
+    pitch_contour = pitch.selected_array['frequency']
+    # plt.plot(pitch_contour)
+    # plt.show()
+    # prompt = input("Press Enter to continue, q to quit...")
+    # if prompt == 'q':
+       # sys.exit()
+    #Calculate the contour's sample rate from the differing array sizes
+    f_s_contour = pitch.selected_array['frequency'].size/sound.values.size*sound.sampling_frequency
+    vibRate = fftVib3Hz(pitch_contour, f_s_contour)
+    
+    ###CALCULATE vibExtent
+    vibExtent_cents, __, __ = compute_vibrato_extent_cents(pitch_contour, f_s_contour, vibRate_fm, windowFactor=0.75)
+    if pd.isna(vibRate):
+        return pd.NA, pd.NA, pd.NA, pd.NA
+
+    label = model.predict([[vibRate, vibExtent]])[0]
+    if label == 0:
+        return pd.NA, pd.NA, pd.NA, pd.NA
+    
+    # visualize_amplitude_vibrato_spec(wavFile, samplerate, vibRate=vibRate)
+    # prompt = input("Press Enter to continue, q to quit...")
+    # if prompt == 'q':
+       # sys.exit()
+    ###CALCULATE ampRate
+    wavData = wavFile / max(abs(wavFile))
+    env_rms, time_rms = rolling_rms(wavData, samplerate, max_vibrato_hz=vibRate, window_fraction=0.5)
+    # env_ds, target_fs = calc_amplitude_envelope(wavData, samplerate, target_fs=200)
+    # filtered_env = bandpass_filter(env_ds, target_fs, vibRate)
+
+    # time_raw = np.arange(len(wavData)) / samplerate
+    # time_env = np.arange(len(filtered_env)) / target_fs
+
+    # --- Calculate amplitude vibrato frequency ---
+    vibAmpRate = fftVib3HzLocal(env_rms, samplerate)
+    vibAmpGuess = vibAmpRate
+    if np.isnan(vibAmpRate):
+        vibAmpGuess = vibRate
+
+    wavelength = 1.0 / vibAmpGuess * samplerate
+    window = int(np.floor(wavelength * 0.75))
+    if window <= 0:
+        window = 1
+
+    maxPeaks = find_peaks(env_rms, distance=window)[0]
+    prominences = peak_prominences(env_rms, maxPeaks)[0] / 2
+    meanAmp = env_rms.mean()
+    # extentEstimate = prominences[1:-1].mean()
+    extentEstimate = prominences.mean()
+    vibAmpExtent = 20 * np.log10(extentEstimate / meanAmp)
+    
+    if refRMS != np.nan:
+        env_spl = 20 * np.log10(env_rms / refRMS)
+        maxPeaks = find_peaks(env_spl, distance=window)[0]
+        prominences = peak_prominences(env_spl, maxPeaks)[0] / 2
+        # meanAmp = env_spl.mean()
+        # extentEstimate = prominences[1:-1].mean()
+        vibAmpExtent_SPL = prominences.mean()
+    else:
+        vibAmpExtent_SPL = np.nan
+    # vibAmpExtent_SPL = 94 + 20 * np.log10(extentEstimate / refRMS)
+    
+    # === 1️⃣ Find peaks and valleys in the rolling RMS ===
+    peaks, _ = find_peaks(env_rms, distance=window)
+    valleys, _ = find_peaks(-env_rms, distance=window)
+
+    # Sort to be safe
+    peaks = np.sort(peaks)
+    valleys = np.sort(valleys)
+
+    # === 2️⃣ Pair each peak with the nearest preceding valley ===
+    pairs = []
+    for p in peaks:
+        # find the most recent valley before the peak
+        v_candidates = valleys[valleys < p]
+        if len(v_candidates) > 0:
+            v = v_candidates[-1]
+            pairs.append((p, v))
+
+    # === 3️⃣ Compute the local dB differences ===
+    db_diffs = []
+    for p, v in pairs:
+        A_peak = env_rms[p]
+        A_valley = env_rms[v]
+        if A_peak > 0 and A_valley > 0:  # avoid log(0)
+            db_diffs.append(20 * np.log10(A_peak / A_valley))
+
+    # === 4️⃣ Average the extent across all cycles ===
+    vibAmpExtent_dB = np.mean(db_diffs) if len(db_diffs) > 0 else np.nan
+    
+
+    return vibRate, vibExtent, vibAmpRate, vibAmpExtent, vibAmpExtent_SPL, vibAmpExtent_dB
+
 def apply_vibTremorDecision_rolling(wavFile, samplerate, model, refRMS, window_duration=1, step_duration=0.01): #f_s_contour makes step less than 0.1 unnecessary
     """
     Apply vibTremorDecision over a rolling window and return median values of each measure.
@@ -1400,7 +1546,7 @@ def apply_vibTremorDecision_rolling(wavFile, samplerate, model, refRMS, window_d
 
     for start in range(0, len(wavFile) - window_size + 1, step_size):
         segment = wavFile[start:start + window_size]
-        result = vibTremorDecision3(segment, samplerate, model, refRMS)
+        result = vibTremorDecision4(segment, samplerate, model, refRMS)
 
         if pd.notna(result[0]):
             vibRate, vibExtent, vibAmpRate, vibAmpExtent, vibAmpExtent_SPL, vibAmpExtent_dB = result
@@ -1515,7 +1661,7 @@ def apply_vibTremorDecision_rolling_harmonics(
         segment = wavFile[start:start + window_size]
 
         # --- vibTremorDecision
-        result = vibTremorDecision3(segment, samplerate, model, refRMS)
+        result = vibTremorDecision4(segment, samplerate, model, refRMS)
         if pd.notna(result[0]):
             vibRate, vibExtent, vibAmpRate, vibAmpExtent, vibAmpExtent_SPL_val, vibAmpExtent_dB_val = result
             vibRates.append(vibRate)
@@ -2349,7 +2495,7 @@ def compute_rms_envelope(x, fs, rate_hz=6, overlap=0.5):
         rms_env[center:center+step] = rms
     return rms_env
 
-def compute_vibrato_extent(envelope, fs, vibRate):
+def compute_vibrato_extent_db(envelope, fs, vibRate):
     """Estimate vibrato extent in linear (Pa) or SPL dB difference."""
     wavelength = int(fs / vibRate)
     peaks, _ = find_peaks(envelope, distance=wavelength//2)
@@ -2365,6 +2511,63 @@ def compute_vibrato_extent(envelope, fs, vibRate):
         if A_p > 0 and A_v > 0:
             db_diffs.append(20 * np.log10(A_p / A_v))
     return np.mean(db_diffs) if len(db_diffs) else np.nan
+
+def compute_vibrato_extent(envelope, samplerate, vibAmpGuess):
+    wavelength = 1.0 / vibAmpGuess * samplerate
+    window = int(np.floor(wavelength * 0.75))
+    if window <= 0:
+        window = 1
+
+    maxPeaks = find_peaks(envelope, distance=window)[0]
+    prominences = peak_prominences(envelope, maxPeaks)[0] / 2 
+    meanAmp = envelope.mean()
+    extentEstimate = np.nanmedian(prominences[1:-1])
+    # extentEstimate = prominences.mean()
+    return extentEstimate
+    
+def compute_vibrato_extent_hilbert(envelope, samplerate, vibAmpGuess):
+    if ~np.isnan(vibAmpGuess):
+        wavelength = 1.0 / vibAmpGuess * samplerate
+    else:
+        wavelength = 1.0 / 5.5 * samplerate
+    window = np.floor(np.floor(wavelength * 0.75))
+    if window <= 0:
+        window = 1
+
+    maxPeaks = find_peaks(envelope, distance=window)[0]
+    prominences = peak_prominences(envelope, maxPeaks)[0] #/ 2 # The hilbert envelope will have np.abs(hilbert(signal))
+    meanAmp = envelope[maxPeaks[1]:maxPeaks[-1]].mean()
+    extentEstimate = np.nanmedian(prominences[1:-1])
+    ampDepthPerc = extentEstimate / meanAmp
+    # extentEstimate = prominences.mean()
+    return extentEstimate, ampDepthPerc
+    
+def compute_vibrato_extent_cents(pitch_contour, f_s_contour, vibFreq, windowFactor=0):
+    if np.isnan(vibFreq):
+        #vibFreq = 5.5
+        ampCents = np.nan
+        #print(str(ampCents))
+        return ampCents
+    wavelength = 1.0/vibFreq*f_s_contour # in frames
+    # print('wavelength: ', str(wavelength))
+    try:
+        window = math.floor(wavelength*windowFactor)
+    except ValueError:
+        window = math.floor(1.0/5.5*f_s_contour*0.75)
+    #
+    if window == 0:
+        window = 1
+    # print('Window: ', str(window))
+    maxPeaks = find_peaks(pitch_contour, distance=window)[0]
+    prominences = scipy.signal.peak_prominences(pitch_contour, maxPeaks)[0]/2
+
+    ampEstimate = prominences[1:-1].mean()
+    meanFreq = pitch_contour[1:-1].mean()
+    # ampStd = prominences[1:-2].std()
+    ampStd = prominences[1:-1].std()
+    #
+    vibExtent_cents = 1200*np.log(1 + ampEstimate/meanFreq)/np.log(2)
+    return vibExtent_cents, maxPeaks, prominences#, vibStd # amplitude in cents
 
 # === MAIN ANALYSIS ===
 def analyze_vibrato(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="unknown", max_freq=8000):
@@ -2421,17 +2624,17 @@ def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_
     results = []
 
     # --- RMS vibrato extent (unfiltered)
-    env_rms = compute_rms_envelope(signal_pa, fs, vibRate_f0)
-    vib_extent_rms_db = compute_vibrato_extent(env_rms, fs, vibRate_f0)
-    mean_spl_rms = 20 * np.log10(np.mean(np.abs(signal_pa)) / P_REF + 1e-12)
+    # env_rms = compute_rms_envelope(signal_pa, fs, vibRate_f0)
+    # vib_extent_rms_db = compute_vibrato_extent(env_rms, fs, vibRate_f0)
+    # mean_spl_rms = 20 * np.log10(np.mean(np.abs(signal_pa)) / P_REF + 1e-12)
 
     results.append({
         "file_id": file_id,
         "harmonic": 0,
         "f0_hz": f0,
         "extent_pa": np.nan,
-        "extent_spl": vib_extent_rms_db,
-        "mean_spl": mean_spl_rms,
+        "extent_spl": np.nan,#vib_extent_rms_db,
+        "mean_spl": np.nan,#mean_spl_rms,
         "metric": "RMS Vibrato Extent",
         "type": "original"
     })
@@ -2450,10 +2653,13 @@ def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_
 
         env_pa = np.abs(hilbert(filtered))
         env_spl = 20 * np.log10(env_pa / P_REF + 1e-12)
-        if np.isnan(vibRate):
-            vibRate = autocorrVib3HzLocal(env_pa,fs)
-        extent_pa = compute_vibrato_extent(env_pa, fs, vibRate_f0)
-        extent_spl = compute_vibrato_extent(env_spl, fs, vibRate_f0)
+        meanCentLogEnv = np.log(env_pa + 1e-12)
+        meanCentLogEnv -= np.mean(meanCentLogEnv)
+        vibRate_amp = autocorrVib3HzLocal(meanCentLogEnv, f_s)
+        if np.isnan(vibRate_f0):
+            vibRate_f0 = vibRate_amp
+        extent_pa, ampDepthPerc = compute_vibrato_extent_hilbert(env_pa, fs, vibRate_amp)
+        extent_spl, __ = compute_vibrato_extent_hilbert(env_spl, fs, vibRate_amp)
         mean_spl = np.median(env_spl)  # mean SPL of this harmonic
 
         results.append({
@@ -2462,6 +2668,7 @@ def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_
             "f0_hz": f_h,
             "extent_pa": extent_pa,
             "extent_spl": extent_spl,
+            "ampDepthPerc": ampDepthPerc,
             "mean_spl": mean_spl,
             "vibRate_amp":vibRate,
             "metric": "Instantaneous Amplitude",
@@ -2469,6 +2676,66 @@ def analyze_vibrato_amp(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_
         })
 
     return pd.DataFrame(results)
+
+import numpy as np
+from scipy.signal import resample
+
+def extract_phase_difference(
+    envelope,
+    pitch_contour,
+    fs_env,
+    fs_pitch,
+    vibRate_f0,
+    vibRate_amp,
+    rate_tol=0.5  # Hz tolerance
+):
+    """
+    Estimate AM–FM phase difference at the vibrato rate.
+
+    Returns np.nan if vibrato rates do not match within tolerance.
+    """
+
+    # --- 1. Reject mismatched rates ---
+    if np.isnan(vibRate_f0) or np.isnan(vibRate_amp):
+        return np.nan
+
+    if abs(vibRate_f0 - vibRate_amp) > rate_tol:
+        return np.nan
+
+    vibRate = 0.5 * (vibRate_f0 + vibRate_amp)
+
+    # --- 2. Resample signals to common length ---
+    N = min(len(envelope), len(pitch_contour))
+    envelope_rs = resample(envelope, N)
+    pitch_rs = resample(pitch_contour, N)
+
+    fs = min(fs_env, fs_pitch)
+    t = np.arange(N) / fs
+
+    # --- 3. Remove DC ---
+    env = envelope_rs - np.mean(envelope_rs)
+    pitch = pitch_rs - np.mean(pitch_rs)
+
+    # --- 4. Reference sinusoids ---
+    omega = 2 * np.pi * vibRate
+    sin_ref = np.sin(omega * t)
+    cos_ref = np.cos(omega * t)
+
+    # --- 5. Phase via projection ---
+    def estimate_phase(x):
+        a = np.dot(x, cos_ref)
+        b = np.dot(x, sin_ref)
+        return np.arctan2(b, a)
+
+    phi_env = estimate_phase(env)
+    phi_pitch = estimate_phase(pitch)
+
+    # --- 6. Phase difference ---
+    phase_diff = phi_env - phi_pitch
+    phase_diff = np.arctan2(np.sin(phase_diff), np.cos(phase_diff))
+
+    return phase_diff
+
 
 # === LOAD SIGNAL + NORMALIZE ===
 def process_file(signal_pa, fs, f0, file_id="unknown", vibRate=6, vibExtent=100):
@@ -2800,6 +3067,8 @@ def visualize_signal_and_harmonics(
         "mean_rms_spl_norm": mean_rms_spl_norm,
     }
 
+with open('DecisionTree.pkl', 'rb') as f:
+    model = pickle.load(f)
 
 
 
@@ -2813,8 +3082,8 @@ import pandas as pd
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.model_selection import StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier
-vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
-# vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
+# vibRatings = pd.read_csv('C:/Users/Reuben/Documents/Code/Promotionsvorhaben/Sandbox/RandiWoodingDatabase.csv')
+vibRatings = pd.read_csv(r'C:\Users\Walker\Documents\RandiWoodingDatabase.csv')
 #Convert (peak-to-peak) cents to mean-to-peak
 vibRatings.loc[:,'EXTENT (CENTS)'] = vibRatings['EXTENT (CENTS)']/2
 
@@ -2904,6 +3173,11 @@ for name, model in models.items():
     std_acc = np.std(fold_accuracies)
     
     print(f"{name}: Mean Accuracy = {mean_acc:.3f} (+/- {std_acc:.3f})")
+
+with open('DecisionTree.pkl','wb') as f:
+    pickle.dump(model,f)
+
+
 
 # vibratoDF = pd.read_csv("C:\Users\Reuben\Documents\Code\Promotionsvorhaben\Sandbox\VibratoUntersuchung.csv")
 #with open('classVib_Anfang_Retro.pkl', 'rb') as f:
@@ -3393,33 +3667,6 @@ def showPitchContour(wavArray, samplerate):
     return pitch_contour, pitch_times, fs_contour
 
 
-def returnContour(data, samplerate,model):
-    ###CALCULATE vibRate
-    sound = Sound(data, samplerate)
-    #Creates PRAAT sound file from .wav array, default 44100 Hz sampling frequency?
-    # pitch = call(sound, "To Pitch", 0.001, 60, 1000) #Use time steps of 0.001 for 1000 Hz f_s
-    pitch = call(sound, "To Pitch", 0.001, 260, 1000) # Raising the low_frequency will reduce the time step and increase resultant fs_contour
-    pitch_contour = pitch.selected_array['frequency']
-    # plt.plot(pitch_contour)
-    # plt.show()
-    # prompt = input("Press Enter to continue, q to quit...")
-    # if prompt == 'q':
-       # sys.exit()
-    #Calculate the contour's sample rate from the differing array sizes
-    f_s_contour = pitch.selected_array['frequency'].size/sound.values.size*sound.sampling_frequency
-    return pitch_contour, f_s_contour
-    
-def returnNormalized(signal, fs):
-    meter = pyln.Meter(fs)
-    loudness = meter.integrated_loudness(signal)
-    signal_norm = pyln.normalize.loudness(signal, loudness, TARGET_LUFS)
-    return signal_norm
-
-def returnEnvelope(data, samplerate,meanFreq):
-        bandwidth_h = meanFreq#2 * f_h * (2**(vib_cents/1200) - 1) * 1.3
-        filtered = bandpass_filter(data, samplerate, meanFreq, bandwidth_h)
-        env_pa = np.abs(hilbert(filtered))
-        return env_pa, filtered, samplerate
 
 
 mask = df['vibPercent'] == 1
@@ -4515,18 +4762,6 @@ import pandas as pd
 import numpy as np
 from scipy.signal import hilbert
 
-def compute_vibrato_extent(envelope, samplerate, vibAmpGuess):
-    wavelength = 1.0 / vibAmpGuess * samplerate
-    window = int(np.floor(wavelength * 0.75))
-    if window <= 0:
-        window = 1
-
-    maxPeaks = find_peaks(envelope, distance=window)[0]
-    prominences = peak_prominences(envelope, maxPeaks)[0] / 2
-    meanAmp = envelope.mean()
-    extentEstimate = np.nanmedian(prominences[1:-1])
-    # extentEstimate = prominences.mean()
-    return extentEstimate
 
 def analyze_vibrato(signal_pa, fs, f0, bandwidth=20, file_id="unknown",n_h=20, vibRate=5.5):
     """Compute vibrato extent for fundamental + 3 harmonics and store in a DataFrame."""
@@ -4823,35 +5058,7 @@ def compute_rms_envelope(x, fs, rate_hz=6, overlap=0.5):
         rms_env[center:center+step] = rms
     return rms_env
 
-def compute_vibrato_extent_db(envelope, fs, vibRate):
-    """Estimate vibrato extent in linear (Pa) or SPL dB difference."""
-    wavelength = int(fs / vibRate)
-    peaks, _ = find_peaks(envelope, distance=wavelength//2)
-    valleys, _ = find_peaks(-envelope, distance=wavelength//2)
-    peaks, valleys = np.sort(peaks), np.sort(valleys)
-    pairs = []
-    for p in peaks:
-        v = valleys[valleys < p]
-        if len(v): pairs.append((p, v[-1]))
-    db_diffs = []
-    for p, v in pairs:
-        A_p, A_v = envelope[p], envelope[v]
-        if A_p > 0 and A_v > 0:
-            db_diffs.append(20 * np.log10(A_p / A_v))
-    return np.mean(db_diffs) if len(db_diffs) else np.nan
 
-def compute_vibrato_extent(envelope, samplerate, vibAmpGuess):
-    wavelength = 1.0 / vibAmpGuess * samplerate
-    window = int(np.floor(wavelength * 0.75))
-    if window <= 0:
-        window = 1
-
-    maxPeaks = find_peaks(envelope, distance=window)[0]
-    prominences = peak_prominences(envelope, maxPeaks)[0] / 2
-    meanAmp = envelope.mean()
-    extentEstimate = np.nanmedian(prominences[1:-1])
-    # extentEstimate = prominences.mean()
-    return extentEstimate
 
 # === MAIN ANALYSIS ===
 def analyze_vibrato(signal_pa, fs, f0, vibRate_f0=6, vibExtent_f0=100, file_id="unknown"):

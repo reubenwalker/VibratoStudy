@@ -121,133 +121,40 @@ def generate_vibrato_signal(
     f0=100.0,
     fs=10000,
     T=4.0,
-    VibRate=6.0,
+    VibRate_FM=6.0,
     VibExtent_cents=40.0,
-    VibAmp=1.0,
+    baseAmp=1,
     InstVibAmpRate=10.0,
-    AM_percent=0.0,
-    fm_phase=0.0,
-    am_phase=0.0,
+    AM_depth=0.1,  # fraction 0 → 1
+    fm_phase = 0,
+    am_phase = 0
 ):
     """
-    Generate a sinusoidal carrier with FM (in cents) and optional AM vibrato.
+    Vibrato signal with controllable AM depth.
 
-    Parameters
-    ----------
-    f0 : float
-        Carrier fundamental frequency (Hz)
-    fs : int
-        Sampling rate (Hz)
-    T : float
-        Signal duration (seconds)
-    VibRate : float
-        Vibrato rate (Hz)
-    VibExtent_cents : float
-        Vibrato extent (peak deviation, cents)
-    VibAmp : float
-        Base amplitude
-    InstVibAmpRate : float
-        Rate of intrinsic AM modulation (Hz)
-    AM_percent : float
-        Additional AM depth as fraction of VibAmp
-    fm_phase : float
-        Phase offset for FM vibrato (radians)
-    am_phase : float
-        Phase offset for AM vibrato (radians)
-
-    Returns
-    -------
-    signal : np.ndarray
-        Vibrato signal
-    t : np.ndarray
-        Time vector
+    AM_depth = 1.0 → full modulation (0 → VibAmp)
+    AM_depth = 0.3 → 30% modulation (0.7*VibAmp → VibAmp)
     """
-
-    # --- TIME VECTOR ---
     dt = 1.0 / fs
     t = np.arange(0, T + dt, dt)
 
-    # --- FM VIBRATO (cents → instantaneous frequency) ---
-    cents_deviation = VibExtent_cents * np.sin(
-        2 * np.pi * VibRate * t + fm_phase
-    )
+    # Frequency modulation (linear Hz)
+    cents_deviation = VibExtent_cents * np.sin(2.0 * np.pi * VibRate_FM * t + fm_phase)
+    VibSignalFreq = f0 * (2.0 ** (cents_deviation / 1200.0))
+    VibSignalPhase = 2.0 * np.pi * np.cumsum(VibSignalFreq) / fs
 
-    
-    inst_freq = f0 * (2.0 ** (cents_deviation / 1200.0))
+    # Amplitude envelope with controlled depth
+    VibAmpInst = baseAmp * ((1 - AM_depth) + AM_depth * np.cos(2.0 * np.pi * InstVibAmpRate * t + am_phase))
 
-    # Integrate instantaneous frequency to phase
-    phase = 2 * np.pi * np.cumsum(inst_freq) / fs
+    # Output
+    VibratoSignal = VibAmpInst * np.sin(VibSignalPhase)
 
-    # --- AM VIBRATO ---
-    vib_amp_inst = np.abs(
-        VibAmp * np.cos(2 * np.pi * InstVibAmpRate * t)
-    )
-
-    if AM_percent > 0:
-        vib_amp_inst *= (
-            1.0 + AM_percent * np.sin(2 * np.pi * VibRate * t + am_phase)
-        )
-
-    # --- OUTPUT SIGNAL ---
-    signal = vib_amp_inst * np.sin(phase)
-
-    return signal, t
+    return VibratoSignal, t
 
 
 
 
-### FINAL PARAMETER SWEEP
-#I have Madde files in the form:
-# f0_vibRateFM_vibExtentFM_vibRateAM_vibExtentFM
-# The vibRateAM and vibExtentAM are performed differently from the artificial signal
-import os
-import glob
-import pandas as pd
-path = os.getcwd()
-wav_files = glob.glob(os.path.join(path, "*.wav*"))#"*.xlsx"))
-df = pd.DataFrame({})
-for filename in wav_files:
-    f0, vibRateFM, vibExtentFM, vibRateAM, vibExtentAM = filename.split('\\')[-1].split('.')[0].split('_')
-    resultDict = {'filename':filename, 
-              'f0':f0,
-              'vibRateFM':vibRateFM,
-              'vibExtentFM':vibExtentFM,
-              'vibRateAM':vibRateAM,
-              'vibExtentAM':vibExtentAM,
-              }
-    df = pd.concat([df, pd.DataFrame.from_records([resultDict])])
-    
-import pandas as pd
-import soundfile as sf
 
-results = []
-
-for idx, row in df.iterrows():
-    filename = row['filename']
-    fs = None
-
-    # --- Load audio ---
-    signal, fs = sf.read(filename)
-
-    # --- Placeholder for analysis ---
-    # fm_rate_est, fm_extent_est, am_rate_est, am_extent_est = analyze_vibrato(signal, fs)
-
-    result = {
-        'filename': filename,
-        'f0': row['f0'],
-        'vibRateFM_gt': row['vibRateFM'],
-        'vibExtentFM_gt': row['vibExtentFM'],
-        'vibRateAM_gt': row['vibRateAM'],
-        'vibExtentAM_gt': row['vibExtentAM'],
-        # 'vibRateFM_est': fm_rate_est,
-        # 'vibExtentFM_est': fm_extent_est,
-        # 'vibRateAM_est': am_rate_est,
-        # 'vibExtentAM_est': am_extent_est,
-    }
-
-    results.append(result)
-
-results_df = pd.DataFrame(results)
 
 
 import itertools
@@ -256,19 +163,19 @@ import pandas as pd
 
 # --- Sweep ranges ---
 f0s = [294, 659]
-vib_rates = np.arange(3.0, 8.5, 0.5)        # Hz
-vib_extents = np.arange(15.0, 75.0, 5.0)    # cents (or Hz if that's your definition)
-am_depth_percents = np.linspace(0.005, 0.025, 5)
+vib_rates = np.arange(3.5, 8.5, 1)        # Hz
+vib_extents = np.arange(15.0, 80.0, 20.0)    # cents (or Hz if that's your definition)
+am_depth_percents = np.linspace(0.05, 0.25, 5)
 phase_offsets = np.array([0, 0.5*np.pi, np.pi, 1.5*np.pi])
 
 ###Simple
-f0s = [100]#, 659]
+# f0s = [100]#, 659]
 
-vib_rates = [6]#np.arange(3.0, 8.5, 0.5)                # Hz
-vib_extents = np.arange(15.0, 75.0, 5.0)#20.0, 40.0, 60.0]         # cents
-am_depth_percents = [0.0]#, 0.01, 0.025]   # fraction of VibAmp
+# vib_rates = np.arange(3.0, 8.5, 0.5)                # Hz
+# vib_extents = np.arange(15.0, 75.0, 5.0)#20.0, 40.0, 60.0]         # cents
+# am_depth_percents = [0.01]#, 0.01, 0.025]   # fraction of VibAmp
 
-phase_offsets = [0.0]#, np.pi]             # radians
+# phase_offsets = [0.0]#, np.pi]             # radians
 
 
 # Optional: test FM-only, AM-only, and combined
@@ -296,23 +203,25 @@ for f0, vib_rate_fm, vib_extent_fm, vib_rate_am, am_pct, condition in itertools.
     elif condition == 'FM+AM':
         fm_phases = phase_offsets
         am_phases = phase_offsets
+        
 
     for fm_phase, am_phase in itertools.product(fm_phases, am_phases):
         if fm_phase == None:
             fm_phase = 0
         if am_phase == None:
             am_phase = 0
+        phaseDiff_gt = am_phase - fm_phase
         # --- Generate signal ---
         f_s = 10000
         VibratoSignal, ____ = generate_vibrato_signal(
                                 f0=f0,
                                 fs=f_s,
                                 T=2,
-                                VibRate=vib_rate_fm,
+                                VibRate_FM=vib_rate_fm,
                                 VibExtent_cents=vib_extent_fm,
-                                VibAmp=1,
+                                baseAmp=1,
                                 InstVibAmpRate=vib_rate_am,
-                                AM_percent=am_pct,
+                                AM_depth=am_pct,
                                 fm_phase=fm_phase,
                                 am_phase=am_phase
                             )
@@ -325,27 +234,38 @@ for f0, vib_rate_fm, vib_extent_fm, vib_rate_am, am_pct, condition in itertools.
         # signal_downsample = downsample_audio(highestPitch, samplerate, f_s_contour)
         envelope, filtered, f_s = returnEnvelope(VibratoSignal, f_s, meanFreq)
         vibRate_f0 = autocorrVib3HzLocal(pitch_contour, f_s_contour)
+        # vibRate_f0 = fftVib3HzLocal(pitch_contour, f_s_contour)
         vibExtent_f0 = vibAmp(pitch_contour, f_s_contour, vibRate_f0, 0.75)#window factor of 0.75 the wavelength
+        # meanCentLogEnv = np.log(envelope + 1e-12)
+        # meanCentLogEnv -= np.mean(meanCentLogEnv)
         vibRate_amp = autocorrVib3HzLocal(envelope, f_s)
+        # vibRate_amp = fftVib3HzLocal(envelope, f_s)
         vibExtent_amp = vibAmpPerc(envelope, f_s, vibRate_amp, 0.75)
         refRMS = np.nan
-        result = apply_vibTremorDecision_rolling_harmonics(VibratoSignal, f_s, model, refRMS, meanFreq,
-                                              window_duration=2, step_duration=2,
-                                              max_freq=2.5*meanFreq, calibrated=False)
-        vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent, vibExtentPa_roll, vibExtentSPL_roll, harmonicSPL_mean  = result
+        # result = apply_vibTremorDecision_rolling_harmonics(VibratoSignal, f_s, model, refRMS, meanFreq,
+                                              # window_duration=2, step_duration=2,
+                                              # max_freq=2.5*meanFreq, calibrated=False)
+        # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent, vibExtentPa_roll, vibExtentSPL_roll, harmonicSPL_mean  = result
 
 
 
-        if ((vibRate_f0 - vibRate_amp < 0.5) & ~np.isnan([vibRate_f0,vibRate_amp]).any()):
-            phaseDiff = extract_phase_difference(envelope, pitch_contour, f_s, f_s_contour, vibRate_f0, vibRate_amp)
-            phaseDiff_gt = am_phase - fm_phase
-        if np.isnan([vibRate_f0,vibRate_amp]).any():
+        if np.isnan([vibRate_f0, vibRate_amp]).any():
             phaseDiff = np.nan
-        else: 
+
+        elif abs(vibRate_f0 - vibRate_amp) < 0.5:
+            phaseDiff = extract_phase_difference(
+                envelope,
+                pitch_contour,
+                f_s,
+                f_s_contour,
+                vibRate_f0,
+                vibRate_amp
+            )
+
+        else:
             phaseDiff = False
-        
         # df_vibrato = process_file_amp(VibratoSignal, f_s, meanFreq, file_id='unknown', vibRate=vibRate_f0, vibExtent=vibExtent_f0)
-        df_vibrato = analyze_vibrato_amp(envelope, f_s, f0, vibRate_f0=6, vibExtent_f0=100, file_id="unknown", max_freq=2.5*meanFreq)
+        df_vibrato = analyze_vibrato_amp(envelope, f_s, f0, vibRate_f0=vibRate_f0, vibExtent_f0=vibExtent_f0, file_id="unknown", max_freq=2.5*meanFreq)
 
         # print(df_vibrato)
         # origMask = ((df_vibrato['type'] =='original') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
@@ -370,13 +290,14 @@ for f0, vib_rate_fm, vib_extent_fm, vib_rate_am, am_pct, condition in itertools.
             'vibExtent_amp':vibExtent_amp,
             'vibRate_amp_harm':df_vibrato.loc[harmMask,'vibRate_amp'],
             'vibExtent_harm':df_vibrato.loc[harmMask,'extent_pa'],
-            'vibExtent_ampPerc':df_vibrato.loc[harmMask,'extent_pa']/np.mean(envelope),
+            'vibExtent_ampPerc':df_vibrato.loc[harmMask,'ampDepthPerc'].iloc[0],#/np.mean(envelope),
             'phaseDiff': phaseDiff
             
         })
 
 sine_sweep_df = pd.DataFrame(results)
 df = sine_sweep_df.copy()
+
 
 import matplotlib.pyplot as plt
 
@@ -393,7 +314,7 @@ plt.plot(lims, lims)
 plt.xlabel('Ground-truth FM rate (Hz)')
 plt.ylabel('Estimated FM rate (Hz)')
 plt.title('FM Vibrato Rate: Estimated vs Ground Truth')
-plt.savefig('fm_rate_est_vs_gt.png', dpi=300)
+# plt.savefig('fm_rate_est_vs_gt.png', dpi=300)
 plt.show()
 plt.close()
 
@@ -435,37 +356,301 @@ plt.scatter(
     df.loc[mask, 'vibExtent_amp'],
     alpha=0.6
 )
+lims = [df['amDepth_gt'].min(), df['amDepth_gt'].max()]
+plt.plot(lims, lims)
 plt.xlabel('Ground-truth AM depth')
 plt.ylabel('Estimated AM extent')
 plt.title('AM Depth: Estimated vs Ground Truth')
 plt.savefig('am_extent_est_vs_gt.png', dpi=300)
+plt.show()
 plt.close()
 
-mask = df['condition'].str.contains('FM')
+
 
 rate_error = df.loc[mask, 'vibRate_f0'] - df.loc[mask, 'vibRate_fm_gt']
 
+dfPhase = df[df['phaseDiff'] != False].copy()
+# dfPhase['phaseDiff_gt'] = dfPhase['phaseDiff_gt'].apply(lambda x: (x + np.pi) % (2*np.pi) - np.pi)
+def flip2Pi(x):
+    while np.abs(x) > np.pi:
+        if x < - np.pi:
+            x += 2*np.pi
+        if x > np.pi:
+            x -= 2*np.pi
+    return x
+dfPhase['phaseDiff_gt'] = dfPhase['phaseDiff_gt'].apply(lambda x: flip2Pi(x))
+dfPhase['phaseDiff'] = dfPhase['phaseDiff_gt'].apply(lambda x: flip2Pi(x))
+mask = dfPhase['condition'].str.contains('FM')
 plt.figure()
 plt.scatter(
-    df.loc[mask, 'phaseDiff_gt'],
-    rate_error,
+    dfPhase.loc[mask, 'phaseDiff_gt'],
+    dfPhase.loc[mask, 'phaseDiff'],
     alpha=0.6
 )
-plt.axhline(0)
-plt.xlabel('AM–FM phase difference (rad)')
-plt.ylabel('FM rate error (Hz)')
+# plt.axhline(0)
+plt.xlabel('Ground Truth AM–FM phase difference (rad)')
+plt.ylabel('Calculated AM–FM phase difference (rad)')
 plt.title('FM Rate Error vs Phase Difference')
-plt.savefig('fm_rate_error_vs_phaseDiff.png', dpi=300)
+
+plt.show()
+plt.savefig('phaseDiff.png', dpi=300)
 plt.close()
 
+# df['vibExtent_ampPercent'] = df['vibExtent_ampPerc'].apply(lambda x: x.iloc[0])
 plt.figure()
 plt.scatter(
     df.loc[mask, 'amDepth_gt'],
     df.loc[mask, 'vibExtent_ampPerc'],
     alpha=0.6
 )
+
 plt.xlabel('Ground-truth vibrato extent (AmpPercent)')
 plt.ylabel('Harmonic envelope extent (AmpPercent)')
 plt.title('Harmonic Envelope AM Extent (AmpPercent) vs Vibrato Extent (AM, percent)')
 plt.savefig('harmonic_extent_vs_vibExtentAmp.png', dpi=300)
+plt.show()
 plt.close()
+
+
+### MADDE PARAMETER SWEEP
+#I have Madde files in the form:
+# f0_vibRateFM_vibExtentFM_vibRateAM_vibExtentFM
+# The vibRateAM and vibExtentAM are performed differently from the artificial signal
+import os
+import glob
+import pandas as pd
+path = os.getcwd()
+wav_files = glob.glob(os.path.join(path, "*.wav*"))#"*.xlsx"))
+df = pd.DataFrame({})
+for filename in wav_files:
+    f0, vibRateFM, vibExtentFM, vibRateAM, vibExtentAM = filename.split('\\')[-1].split('.')[0].split('_')
+    resultDict = {'filename':filename, 
+              'f0':f0,
+              'vibRateFM':vibRateFM,
+              'vibExtentFM':vibExtentFM,
+              'vibRateAM':vibRateAM,
+              'vibExtentAM':vibExtentAM,
+              }
+    df = pd.concat([df, pd.DataFrame.from_records([resultDict])])
+    
+import pandas as pd
+import soundfile as sf
+
+results = []
+
+for idx, row in df.iterrows():
+    filename = row['filename']
+    f_s = None
+
+    # --- Load audio ---
+    signal, f_s = sf.read(filename)
+    # Avoid initial onset artifact
+    begin25 = int(len(signal)*0.25)
+    signal = signal[begin25:]
+
+       ###Technically don't need a rolling window for an artificial signal, but let's see what happens
+    pitch_contour, f_s_contour = returnContour(signal, f_s, model)
+    meanFreq = np.mean(pitch_contour)
+    # signal_norm = returnNormalized(highestPitch, samplerate)
+    # signal_downsample = downsample_audio(highestPitch, samplerate, f_s_contour)
+    envelope, filtered, f_s = returnEnvelope(signal, f_s, meanFreq)
+    # vibRate_f0 = autocorrVib3HzLocal(pitch_contour, f_s_contour)
+    vibRate_f0 = fftVib3HzLocal(pitch_contour, f_s_contour)
+    vibExtent_f0, __ , __ = compute_vibrato_extent_cents(pitch_contour, f_s_contour, vibRate_f0, windowFactor=0.75)#window factor of 0.75 the wavelength
+
+    # vibRate_amp = autocorrVib3HzLocal(envelope, f_s)
+    vibRate_amp = fftVib3HzLocal(envelope, f_s)
+    vibExtent_amp = vibAmpPerc(envelope, f_s, vibRate_amp, 0.75)
+    refRMS = np.nan
+    # result = apply_vibTremorDecision_rolling_harmonics(VibratoSignal, f_s, model, refRMS, meanFreq,
+                                          # window_duration=2, step_duration=2,
+                                          # max_freq=2.5*meanFreq, calibrated=False)
+    # vibRate_f0, vibExtent_f0, vibRate_amp, vibExtent_amp, vibExtent_SPL, vibExtent_dB, vibPercent, vibExtentPa_roll, vibExtentSPL_roll, harmonicSPL_mean  = result
+    if np.isnan([vibRate_f0, vibRate_amp]).any():
+        phaseDiff = np.nan
+
+    elif abs(vibRate_f0 - vibRate_amp) < 0.5:
+        phaseDiff = extract_phase_difference(
+            envelope,
+            pitch_contour,
+            f_s,
+            f_s_contour,
+            vibRate_f0,
+            vibRate_amp
+        )
+
+    else:
+        phaseDiff = False
+    
+    # df_vibrato = process_file_amp(VibratoSignal, f_s, meanFreq, file_id='unknown', vibRate=vibRate_f0, vibExtent=vibExtent_f0)
+    df_vibrato = analyze_vibrato_amp(envelope, f_s, f0, vibRate_f0=vibRate_f0, vibExtent_f0=vibExtent_f0, file_id="unknown", max_freq=2.5*meanFreq)
+
+    # print(df_vibrato)
+    # origMask = ((df_vibrato['type'] =='original') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
+    # normMask0 = ((df_vibrato['type'] =='normalized') & (df_vibrato['metric'] == 'RMS Vibrato Extent'))
+    harmMask = ((df_vibrato['type'] =='original') & (df_vibrato['metric'] == 'Instantaneous Amplitude'))
+    # normMask1 = ((df_vibrato['type'] =='normalized') & (df_vibrato['metric'] == 'Instantaneous Amplitude'))
+    
+    
+    result = {
+        'filename': filename,
+        'f0': row['f0'],
+        'vibRateFM_gt': row['vibRateFM'],
+        'vibExtentFM_gt': row['vibExtentFM'],
+        'vibRateAM_gt': row['vibRateAM'],
+        'vibExtentAM_gt': row['vibExtentAM'],
+        'vibRate_f0':vibRate_f0,
+        'vibExtent_f0':vibExtent_f0,
+        'vibRate_amp':vibRate_amp,
+        'vibExtent_amp':vibExtent_amp,
+        'vibRate_amp_harm':df_vibrato.loc[harmMask,'vibRate_amp'],
+        'vibExtent_harm':df_vibrato.loc[harmMask,'extent_pa'],
+        'vibExtent_ampPerc':df_vibrato.loc[harmMask,'ampDepthPerc'].iloc[0],
+        'phaseDiff': phaseDiff
+    }
+
+    results.append(result)
+
+results_df = pd.DataFrame(results)
+
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+
+# --- FM Vibrato Rate ---
+plt.figure()
+plt.scatter(
+    results_df['vibRateFM_gt'],
+    results_df['vibRate_f0'],
+    alpha=0.6
+)
+lims = [results_df['vibRateFM_gt'].min(), results_df['vibRateFM_gt'].max()]
+# plt.plot(lims, lims)
+plt.xlabel('Ground-truth FM rate (Hz)')
+plt.ylabel('Estimated FM rate (Hz)')
+plt.title('FM Vibrato Rate: Estimated vs Ground Truth')
+plt.savefig('fm_rate_est_vs_gt.png', dpi=300)
+plt.show()
+plt.close()
+
+# --- FM Vibrato Extent ---
+plt.figure()
+plt.scatter(
+    results_df['vibExtentFM_gt'],
+    results_df['vibExtent_f0'],
+    alpha=0.6
+)
+lims = [results_df['vibExtentFM_gt'].min(), results_df['vibExtentFM_gt'].max()]
+# plt.plot(lims, lims)
+plt.xlabel('Ground-truth vibrato extent (cents)')
+plt.ylabel('Estimated vibrato extent (cents)')
+plt.title('FM Vibrato Extent: Estimated vs Ground Truth')
+plt.savefig('fm_extent_est_vs_gt.png', dpi=300)
+plt.show()
+plt.close()
+
+# --- AM Rate ---
+plt.figure()
+plt.scatter(
+    results_df['vibRateAM_gt'],
+    results_df['vibRate_amp'],
+    alpha=0.6
+)
+lims = [results_df['vibRateAM_gt'].min(), results_df['vibRateAM_gt'].max()]
+# plt.plot(lims, lims)
+plt.xlabel('Ground-truth AM rate (Hz)')
+plt.ylabel('Estimated AM rate (Hz)')
+plt.title('AM Rate: Estimated vs Ground Truth')
+plt.savefig('am_rate_est_vs_gt.png', dpi=300)
+plt.show()
+plt.close()
+
+# --- AM Depth / Extent ---
+plt.figure()
+plt.scatter(
+    results_df['vibExtentAM_gt'],
+    results_df['vibExtent_amp'],
+    alpha=0.6
+)
+plt.xlabel('Ground-truth AM depth')
+plt.ylabel('Estimated AM extent')
+plt.title('AM Depth: Estimated vs Ground Truth')
+plt.savefig('am_extent_est_vs_gt.png', dpi=300)
+plt.show()
+plt.close()
+
+# --- FM Rate Error vs Phase Difference ---
+# rate_error = results_df['vibRate_f0'] - results_df['vibRate_fm_gt']
+
+# plt.figure()
+# plt.scatter(
+    # results_df['phaseDiff_gt'],
+    # rate_error,
+    # alpha=0.6
+# )
+# plt.axhline(0)
+# plt.xlabel('AM–FM phase difference (rad)')
+# plt.ylabel('FM rate error (Hz)')
+# plt.title('FM Rate Error vs Phase Difference')
+# plt.savefig('fm_rate_error_vs_phaseDiff.png', dpi=300)
+# plt.show()
+# plt.close()
+
+# --- Harmonic Envelope AM Extent vs Vibrato Extent ---
+# results_df['vibExtent_ampPercent'] = results_df['vibExtent_ampPerc'].apply(lambda x: x.iloc[0])
+
+plt.figure()
+plt.scatter(
+    results_df['vibExtentAM_gt'],
+    results_df['vibExtent_ampPerc'],
+    alpha=0.6
+)
+plt.xlabel('Ground-truth vibrato extent (AmpPercent)')
+plt.ylabel('Harmonic envelope extent (AmpPercent)')
+plt.title('Harmonic Envelope AM Extent (AmpPercent) vs Vibrato Extent (AM, percent)')
+plt.savefig('harmonic_extent_vs_vibExtentAmp.png', dpi=300)
+plt.show()
+plt.close()
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+cols = [
+    # Ground truth
+    'vibRateFM_gt',
+    'vibExtentFM_gt',
+    'vibRateAM_gt',
+    'vibExtentAM_gt',
+    # 'phaseDiff_gt',
+
+    # Estimates
+    'vibRate_f0',
+    'vibExtent_f0',
+    'vibRate_amp',
+    'vibExtent_amp',
+    # 'phaseDiff'
+]
+
+df_corr = results_df[cols].dropna()
+
+corr = df_corr.corr()
+
+plt.figure(figsize=(8,6))
+im = plt.imshow(corr, vmin=-1, vmax=1)
+plt.colorbar(im, fraction=0.046)
+
+plt.xticks(range(len(cols)), cols, rotation=45, ha='right')
+plt.yticks(range(len(cols)), cols)
+plt.title('Correlation Matrix: Ground Truth vs Estimates')
+
+for i in range(len(cols)):
+    for j in range(len(cols)):
+        plt.text(j, i, f"{corr.iloc[i, j]:.2f}",
+                 ha='center', va='center', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+###Find outlier vibRate_f0
+results_df = 
+results_df[((results_df['vibRateFM_gt'].astype('float') > 6) & (results_df['vibRate_f0'].astype('float') < 5))].filename
